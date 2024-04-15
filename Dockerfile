@@ -1,12 +1,14 @@
 # ================================
 # Build image contains swift compiler and libraries like netcdf or eccodes
 # ================================
-FROM ghcr.io/open-meteo/docker-container-build:latest as build
+# FROM ghcr.io/open-meteo/docker-container-build:latest as build
 # MRB note to self: I have forked the above in case we need to modify and build our own image in future (no mods as yet)...
 #    https://github.com/drmrbrewer/docker-container-build
 #    https://hub.docker.com/repository/docker/drmrbrewer/docker-container-build/general
-# UPDATE... reverting to using the original above as mine is now out of date... too much hassle to update and rebuild (and not much benefit as I didn't manage to completely avoid any dependency on the open-meteo repo)...
-#    FROM drmrbrewer/docker-container-build:latest as build
+# NOTE... it's a bit of a hassle to update and rebuild this dependency (and not much benefit as I didn't manage to completely 
+# avoid any dependency on the open-meteo repo)... so we could just comment out the following again and revert to using the 
+# main image above... assuming it's still available...
+FROM drmrbrewer/docker-container-build:latest as build
 
 WORKDIR /build
 
@@ -30,12 +32,14 @@ RUN MARCH_SKYLAKE=TRUE swift build -c release
 # ================================
 # Run image contains swift runtime libraries, netcdf, eccodes, cdo and cds utilities
 # ================================
-FROM ghcr.io/open-meteo/docker-container-run:latest
+# FROM ghcr.io/open-meteo/docker-container-run:latest
 # MRB note to self: I have forked the above in case we need to modify and build our own image in future (no mods as yet)...
 #    https://github.com/drmrbrewer/docker-container-run
 #    https://hub.docker.com/repository/docker/drmrbrewer/docker-container-run/general
-# UPDATE... reverting to using the original above as mine is now out of date... too much hassle to update and rebuild (and not much benefit as I didn't manage to completely avoid any dependency on the open-meteo repo)...
-#    FROM drmrbrewer/docker-container-run:latest
+# NOTE... it's a bit of a hassle to update and rebuild this dependency (and not much benefit as I didn't manage to completely 
+# avoid any dependency on the open-meteo repo)... so we could just comment out the following again and revert to using the 
+# main image above... assuming it's still available...
+FROM drmrbrewer/docker-container-run:latest
 
 # Create a openmeteo user and group with /root as its home directory
 # MRB commented this out... easier to do everything as root...
