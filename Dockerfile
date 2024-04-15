@@ -2,10 +2,12 @@
 # Build image contains swift compiler and libraries like netcdf or eccodes
 # ================================
 # MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
+# https://github.com/drmrbrewer/docker-container-build
 # https://hub.docker.com/repository/docker/drmrbrewer/docker-container-build/general
 FROM ghcr.io/open-meteo/docker-container-build:latest as build
-# UPDATE... reverting to originals above as mine is now out of date...
+# UPDATE... reverting to using original above as mine is now out of date...
 # FROM drmrbrewer/docker-container-build:latest as build
+
 WORKDIR /build
 
 # First just resolve dependencies.
@@ -29,9 +31,10 @@ RUN MARCH_SKYLAKE=TRUE swift build -c release
 # Run image contains swift runtime libraries, netcdf, eccodes, cdo and cds utilities
 # ================================
 # MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
+# https://github.com/drmrbrewer/docker-container-run
 # https://hub.docker.com/repository/docker/drmrbrewer/docker-container-run/general
 FROM ghcr.io/open-meteo/docker-container-run:latest
-# UPDATE... reverting to originals above as mine is now out of date...
+# UPDATE... reverting to using original above as mine is now out of date...
 # FROM drmrbrewer/docker-container-run:latest
 
 # Create a openmeteo user and group with /root as its home directory
