@@ -19,7 +19,9 @@ COPY . .
 
 # Compile with optimizations
 # MRB changed -march from 'skylake' to 'native' so that it compiles on arm64... building the arm64 image via depot.dev seems to work even if it doesn't via github itself...
-RUN swift build -c release -Xcc -march=native
+# RUN swift build -c release -Xcc -march=native
+# UPDATE now reverted to what is in main Dockerfile because I think they fixed it for arm64 with the following version...
+RUN MARCH_SKYLAKE=TRUE swift build -c release
 
 
 # ================================
