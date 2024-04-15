@@ -1,7 +1,10 @@
 # ================================
 # Build image contains swift compiler and libraries like netcdf or eccodes
 # ================================
-FROM ghcr.io/open-meteo/docker-container-build:latest as build
+# MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
+# https://hub.docker.com/repository/docker/drmrbrewer/docker-container-build/general
+# FROM ghcr.io/open-meteo/docker-container-build:latest as build
+FROM drmrbrewer/docker-container-build:latest as build
 WORKDIR /build
 
 # First just resolve dependencies.
@@ -15,34 +18,49 @@ RUN swift package resolve
 COPY . .
 
 # Compile with optimizations
-RUN MARCH_SKYLAKE=TRUE swift build -c release
+# MRB changed -march from 'skylake' to 'native' so that it compiles on arm64... building the arm64 image via depot.dev seems to work even if it doesn't via github itself...
+RUN swift build -c release -Xcc -march=native
 
 
 # ================================
 # Run image contains swift runtime libraries, netcdf, eccodes, cdo and cds utilities
 # ================================
-FROM ghcr.io/open-meteo/docker-container-run:latest
+# MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
+# https://hub.docker.com/repository/docker/drmrbrewer/docker-container-run/general
+# FROM ghcr.io/open-meteo/docker-container-run:latest
+FROM drmrbrewer/docker-container-run:latest
 
-# Create a openmeteo user and group with /app as its home directory
-RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app openmeteo
+# Create a openmeteo user and group with /root as its home directory
+# MRB commented this out... easier to do everything as root...
+# RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /root openmeteo
 
 # Switch to the new home directory
-WORKDIR /app
+# MRB made this (and below) /root not /app
+WORKDIR /root
 
 # Copy build artifacts
-COPY --from=build --chown=openmeteo:openmeteo /build/.build/release/openmeteo-api /app
-RUN mkdir -p /app/Resources
-# COPY --from=build --chown=openmeteo:openmeteo /build/Resources /app/Resources
-COPY --from=build --chown=openmeteo:openmeteo /build/.build/release/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources /app/Resources/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources
-COPY --from=build --chown=openmeteo:openmeteo /build/Public /app/Public
+# MRB removed --chown=openmeteo:openmeteo from each... easier to do everything as root...
+COPY --from=build /build/.build/release/openmeteo-api /root
+RUN mkdir -p /root/Resources
+# COPY --from=build /build/Resources /root/Resources
+COPY --from=build /build/.build/release/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources /root/Resources/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources
+COPY --from=build /build/Public /root/Public
 
-# Attach a volumne
-RUN mkdir /app/data && chown openmeteo:openmeteo /app/data
-VOLUME /app/data
+# Attach a volume
+# MRB removed chown openmeteo:openmeteo... easier to do everything as root...
+RUN mkdir /root/data
+VOLUME /root/data
+
+# MRB added this... needed for data file download logs...
+RUN mkdir /root/log
 
 # Ensure all further commands run as the openmeteo user
-USER openmeteo:openmeteo
+# MRB commented this out... easier to do everything as root...
+# USER openmeteo:openmeteo
 
-# Start the service when the image is run, default to listening on 8080 in production environment 
-ENTRYPOINT ["./openmeteo-api"]
-CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+# Start the service when the image is run, default to listening on 80 in production environment 
+# MRB changed this from 8080 (in master repo) to avoid conflict with port 8080 usage elsewhere (vscode)
+# and for consistency with other apps in the suite...
+# UPDATE... commented this out now... use this ENTRYPOINT in the Dockerfile which is based off of this one instead...
+# ENTRYPOINT ["./openmeteo-api"]
+# CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "80"]
