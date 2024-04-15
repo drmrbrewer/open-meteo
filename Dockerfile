@@ -1,12 +1,12 @@
 # ================================
 # Build image contains swift compiler and libraries like netcdf or eccodes
 # ================================
-# MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
-# https://github.com/drmrbrewer/docker-container-build
-# https://hub.docker.com/repository/docker/drmrbrewer/docker-container-build/general
 FROM ghcr.io/open-meteo/docker-container-build:latest as build
-# UPDATE... reverting to using original above as mine is now out of date...
-# FROM drmrbrewer/docker-container-build:latest as build
+# MRB note to self: I have forked the above in case we need to modify and build our own image in future (no mods as yet)...
+#    https://github.com/drmrbrewer/docker-container-build
+#    https://hub.docker.com/repository/docker/drmrbrewer/docker-container-build/general
+# UPDATE... reverting to using the original above as mine is now out of date... too much hassle to update and rebuild (and not much benefit as I didn't manage to completely avoid any dependency on the open-meteo repo)...
+#    FROM drmrbrewer/docker-container-build:latest as build
 
 WORKDIR /build
 
@@ -22,27 +22,27 @@ COPY . .
 
 # Compile with optimizations
 # MRB changed -march from 'skylake' to 'native' so that it compiles on arm64... building the arm64 image via depot.dev seems to work even if it doesn't via github itself...
-# RUN swift build -c release -Xcc -march=native
-# UPDATE now reverted to what is in main Dockerfile because I think they fixed it for arm64 with the following version...
+#    RUN swift build -c release -Xcc -march=native
+# UPDATE now reverted to what is in main Dockerfile because I think they fixed it for arm64 subsequent to my having to do the above...
 RUN MARCH_SKYLAKE=TRUE swift build -c release
 
 
 # ================================
 # Run image contains swift runtime libraries, netcdf, eccodes, cdo and cds utilities
 # ================================
-# MRB note to self: I have forked the following in case we need to modify and build our own image in future (no mods as yet)...
-# https://github.com/drmrbrewer/docker-container-run
-# https://hub.docker.com/repository/docker/drmrbrewer/docker-container-run/general
 FROM ghcr.io/open-meteo/docker-container-run:latest
-# UPDATE... reverting to using original above as mine is now out of date...
-# FROM drmrbrewer/docker-container-run:latest
+# MRB note to self: I have forked the above in case we need to modify and build our own image in future (no mods as yet)...
+#    https://github.com/drmrbrewer/docker-container-run
+#    https://hub.docker.com/repository/docker/drmrbrewer/docker-container-run/general
+# UPDATE... reverting to using the original above as mine is now out of date... too much hassle to update and rebuild (and not much benefit as I didn't manage to completely avoid any dependency on the open-meteo repo)...
+#    FROM drmrbrewer/docker-container-run:latest
 
 # Create a openmeteo user and group with /root as its home directory
 # MRB commented this out... easier to do everything as root...
 # RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /root openmeteo
 
 # Switch to the new home directory
-# MRB made this (and below) /root not /app
+# MRB changed this (and all other instances below) from "/app" to "/root"...
 WORKDIR /root
 
 # Copy build artifacts
