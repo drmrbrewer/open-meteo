@@ -24,7 +24,7 @@ RUN MARCH_SKYLAKE=TRUE swift build -c release
 FROM ghcr.io/open-meteo/docker-container-run:latest
 
 # Create a openmeteo user and group with /root as its home directory
-# MRB commented this out... easier to do everything as root...
+# MRB commented this out... need to do everything as root...
 # RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /root openmeteo
 
 # Switch to the new home directory
