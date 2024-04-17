@@ -1,44 +1,11 @@
 import Foundation
 import Vapor
 import NIO
-import NIOConcurrencyHelpers
-
 
 /**
- Limit API request rate limit for the free API.
+ Limit API request rate for the free API.
  Count how many calls have been made by a given IP address.
  */
-final class RateLimiterLifecycle: LifecycleHandler {
-    private let backgroundWatcher = NIOLockedValueBox<RepeatedTask?>(nil)
-    
-    public static var instance = RateLimiterLifecycle()
-        
-    private init() {}
-    
-    /// Setup timer to empty statics every minute, hour or day
-    func didBoot(_ application: Application) throws {
-        backgroundWatcher.withLockedValue({
-            let eventloop = application.eventLoopGroup.next()
-            $0 = eventloop.scheduleRepeatedAsyncTask(
-                initialDelay: .seconds(Int64(60 - Timestamp.now().second)),
-                delay: .seconds(60),
-                { task in
-                    eventloop.makeFutureWithTask({
-                        await RateLimiter.instance.minutelyCallback()
-                    })
-                }
-            )
-        })
-    }
-    
-    func shutdown(_ application: Application) {
-        backgroundWatcher.withLockedValue {
-            $0?.cancel()
-        }
-    }
-}
-
-/// Thread safe access to rate limiter
 final actor RateLimiter {
     private static let limitDaily = Float(Environment.get("CALL_LIMIT_DAILY").flatMap(Int.init) ?? 10_000)
     
@@ -62,6 +29,7 @@ final actor RateLimiter {
         
     private init() {}
     
+    /// Called every minute from a life cycle handler
     func minutelyCallback() {
         let now = Timestamp.now().timeIntervalSince1970
         minutelyPerIPv4.removeAll(keepingCapacity: true)
@@ -172,47 +140,6 @@ enum RateLimitError: Error, AbortError {
 }
 
 extension Request {
-    /// On open-meteo servers, make sure, the right domain is active
-    /// Returns the hostdomain if running on "open-meteo.com"
-    @discardableResult
-    func ensureSubdomain(_ subdomain: String, alias: [String] = []) async throws -> String? {
-        guard let host = headers[.host].first(where: {$0.contains("open-meteo.com")}) else {
-            return nil
-        }
-        let isFreeApi = host.starts(with: subdomain) || alias.contains(where: {host.starts(with: $0)}) == true
-        let isCustomerApi = host.starts(with: "customer-\(subdomain)") || alias.contains(where: {host.starts(with: "customer-\($0)")}) == true
-        
-        if !(isFreeApi || isCustomerApi) {
-            throw Abort.init(.notFound)
-        }
-        
-        if isFreeApi {
-            guard let address = peerAddress ?? remoteAddress else {
-                return host
-            }
-            try await RateLimiter.instance.check(address: address)
-        }
-        return host
-    }
-    
-    /// For customer API endpoints, check API key.
-    func ensureApiKey(_ subdomain: String, alias: [String] = [], apikey: String?) throws {
-        guard let host = headers[.host].first(where: {$0.contains("open-meteo.com")}) else {
-            return
-        }
-        let isCustomerApi = host.starts(with: "customer-\(subdomain)") || alias.contains(where: {host.starts(with: "customer-\($0)")}) == true
-        
-        /// API node dedicated to customers
-        if !ApiKeyManager.apiKeys.isEmpty && isCustomerApi {
-            guard let apikey else {
-                throw ApiKeyManagerError.apiKeyRequired
-            }
-            guard ApiKeyManager.apiKeys.contains(String.SubSequence(apikey)) else {
-                throw ApiKeyManagerError.apiKeyInvalid
-            }
-        }
-    }
-    
     func incrementRateLimiter(weight: Float) async {
         guard let address = peerAddress ?? remoteAddress else {
             return
@@ -223,37 +150,3 @@ extension Request {
         }
     }
 }
-
-
-/// Simple API key management. Ensures API calls do not get blocked by automatic rate limiting above 10k daily calls.
-fileprivate struct ApiKeyManager {
-    static var apiKeys: [String.SubSequence] = Environment.get("API_APIKEYS")?.split(separator: ",") ?? []
-}
-
-enum ApiKeyManagerError: Error {
-    case apiKeyRequired
-    case apiKeyInvalid
-}
-
-extension ApiKeyManagerError: AbortError {
-    var status: HTTPResponseStatus {
-        switch self {
-        case .apiKeyRequired:
-            return .unauthorized
-        case .apiKeyInvalid:
-            return .badRequest
-        }
-    }
-    
-    var reason: String {
-        switch self {
-        case .apiKeyRequired:
-            return "API key required. Please add &apikey= to the URL."
-        case .apiKeyInvalid:
-            return "The supplied API key is invalid."
-        }
-    }
-}
-
-
-

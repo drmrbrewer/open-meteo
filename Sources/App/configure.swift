@@ -112,8 +112,24 @@ public func configure(_ app: Application) throws {
 
     //app.views.use(.leaf)
     
-    app.lifecycle.use(OmFileManager.instance)
-    app.lifecycle.use(RateLimiterLifecycle.instance)
+    app.lifecycle.repeatedTask(
+        initialDelay: .seconds(0),
+        delay: .seconds(10),
+        ApiKeyManager.update
+    )
+    
+    app.lifecycle.repeatedTask(
+        initialDelay: .seconds(0),
+        delay: .seconds(2),
+        OmFileManager.instance.backgroundTask
+    )
+    
+    app.lifecycle.repeatedTask(
+        initialDelay: .seconds(Int64(60 - Timestamp.now().second)),
+        delay: .seconds(60)
+    ) { _ in
+        await RateLimiter.instance.minutelyCallback()
+    }
 
     // register routes
     try routes(app)
