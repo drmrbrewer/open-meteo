@@ -8,6 +8,7 @@
 # NOTE... it's a bit of a hassle to update and rebuild this dependency (and not much benefit as I didn't manage to completely 
 # avoid any dependency on the open-meteo repo)... so we could just comment out the following again and revert to using the 
 # main image above... assuming it's still available...
+# this is particularly the case if you're getting swift-related errors because this image contains the swift compiler...
 FROM drmrbrewer/docker-container-build:latest as build
 
 WORKDIR /build
