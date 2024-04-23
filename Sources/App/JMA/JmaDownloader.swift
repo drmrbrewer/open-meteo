@@ -52,7 +52,6 @@ struct JmaDownload: AsyncCommand {
         guard let server = signature.server else {
             fatalError("Parameter server required")
         }
-        try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
         
         if let timeinterval = signature.timeinterval {
             for run in try Timestamp.parseRange(yyyymmdd: timeinterval).toRange(dt: 86400).with(dtSeconds: 86400 / 4) {
@@ -432,6 +431,7 @@ struct JmaPressureVariable: PressureVariableRespresentable, JmaVariableDownloada
         case .temperature:
             return (1, -273.15)
         case .geopotential_height:
+            // NOTE: Data might already by in metres. The controller is multipliying by grafity constant later again
             // convert geopotential to height (WMO defined gravity constant)
             return (1/9.80665, 0)
         default:

@@ -178,7 +178,6 @@ struct GfsDownload: AsyncCommand {
     
     /// download GFS025 and NAM CONUS
     func downloadGfs(application: Application, domain: GfsDomain, run: Timestamp, variables: [any GfsVariableDownloadable], secondFlush: Bool, maxForecastHour: Int?) async throws -> [GenericVariableHandle] {
-        try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
         let logger = application.logger
         
         // GFS025 ensemble does not have elevation information, use non-ensemble version
@@ -354,6 +353,18 @@ struct GfsDownload: AsyncCommand {
                         }
                     }
                     
+                    // Cloud cover in GFS ensemble may be -1 or 101 or 102
+                    if [GfsDomain.gfs025_ens, .gfs05_ens].contains(domain), let variable = variable.variable as? GfsSurfaceVariable, variable == .cloud_cover {
+                        for i in grib2d.array.data.indices {
+                            if grib2d.array.data[i] > 100 {
+                                grib2d.array.data[i] = 100
+                            }
+                            if grib2d.array.data[i] < 0 {
+                                grib2d.array.data[i] = 0
+                            }
+                        }
+                    }
+                    
                     // Scaling before compression with scalefactor
                     if let fma = variable.variable.multiplyAdd(domain: domain) {
                         grib2d.array.data.multiplyAdd(multiply: fma.multiply, add: fma.add)
@@ -391,7 +402,6 @@ struct GfsDownload: AsyncCommand {
     /// Download precipitation members from GFS ensemble and calculate probability
     func downloadPrecipitationProbability(application: Application, run: Timestamp) async throws -> [GenericVariableHandle] {
         let domain = GfsDomain.gfs025_ensemble
-        try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
         
         let grid = domain.grid
         var grib2d = GribArray2D(nx: grid.nx, ny: grid.ny)
