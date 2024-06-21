@@ -43,6 +43,15 @@ extension Application {
         if let existing = self.storage[HttpClientKey.self] {
             return existing
         }
+        let new = makeNewHttpClient()
+        self.storage.set(HttpClientKey.self, to: new) {
+            try $0.syncShutdown()
+        }
+        return new
+    }
+    
+    /// Create a new HTTP client instance. `shutdown` must be called after using it
+    func makeNewHttpClient() -> HTTPClient {
         // try again with very high timeouts, so only the curl internal timers are used
         let configuration = HTTPClient.Configuration(
             redirectConfiguration: .follow(max: 5, allowCycles: false),
@@ -51,14 +60,10 @@ extension Application {
         // NCEP server still struggle with H2
         //configuration.httpVersion = .http1Only
         
-        let new = HTTPClient(
+        return HTTPClient(
             eventLoopGroupProvider: .shared(eventLoopGroup),
             configuration: configuration,
             backgroundActivityLogger: logger)
-        self.storage.set(HttpClientKey.self, to: new) {
-            try $0.syncShutdown()
-        }
-        return new
     }
 }
 
@@ -83,11 +88,11 @@ public func configure(_ app: Application) throws {
     app.asyncCommands.use(DownloadIconWaveCommand(), as: "download-iconwave")
     app.asyncCommands.use(DownloadEcmwfCommand(), as: "download-ecmwf")
     app.asyncCommands.use(DownloadEra5Command(), as: "download-era5")
+    app.asyncCommands.use(MfWaveDownload(), as: "download-mfwave")
     app.asyncCommands.use(DownloadDemCommand(), as: "download-dem")
     app.asyncCommands.use(DownloadCamsCommand(), as: "download-cams")
     app.asyncCommands.use(MeteoFranceDownload(), as: "download-meteofrance")
     app.asyncCommands.use(DownloadArpaeCommand(), as: "download-arpae")
-    app.commands.use(CronjobCommand(), as: "cronjob")
     app.asyncCommands.use(SeasonalForecastDownload(), as: "download-seasonal-forecast")
     app.asyncCommands.use(GfsDownload(), as: "download-gfs")
     app.asyncCommands.use(GfsGraphCastDownload(), as: "download-gfs-graphcast")

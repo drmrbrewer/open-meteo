@@ -40,6 +40,12 @@ struct GfsDownload: AsyncCommand {
         
         @Option(name: "upload-s3-bucket", help: "Upload open-meteo database to an S3 bucket after processing")
         var uploadS3Bucket: String?
+        
+        @Flag(name: "upload-s3-only-probabilities", help: "Only upload probabilities files to S3")
+        var uploadS3OnlyProbabilities: Bool
+        
+        @Flag(name: "skip-missing", help: "Ignore missing GRIB messages in inventory")
+        var skipMissing: Bool
     }
 
     var help: String {
@@ -77,7 +83,7 @@ struct GfsDownload: AsyncCommand {
         case .gfs025_ensemble:
             variables = [GfsSurfaceVariable.precipitation_probability]
             let handles = try await downloadPrecipitationProbability(application: context.application, run: run)
-            try GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, nMembers: 1, handles: handles)
+            try GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles)
         case .gfs05_ens:
             fallthrough
         case .gfs025_ens:
@@ -109,15 +115,24 @@ struct GfsDownload: AsyncCommand {
             
             variables = onlyVariables ?? (signature.upperLevel ? (signature.surfaceLevel ? surfaceVariables+pressureVariables : pressureVariables) : surfaceVariables)
             
-            let handles = try await downloadGfs(application: context.application, domain: domain, run: run, variables: variables, secondFlush: signature.secondFlush, maxForecastHour: signature.maxForecastHour)
+            let handles = try await downloadGfs(application: context.application, domain: domain, run: run, variables: variables, secondFlush: signature.secondFlush, maxForecastHour: signature.maxForecastHour, skipMissing: signature.skipMissing)
             
             let nConcurrent = signature.concurrent ?? 1
-            try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, nMembers: domain.ensembleMembers, handles: handles, concurrent: nConcurrent)
+            try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
+        case .gfswave025, .gfswave025_ens:
+            variables = GfsWaveVariable.allCases
+            let handles = try await downloadGfs(application: context.application, domain: domain, run: run, variables: variables, secondFlush: signature.secondFlush, maxForecastHour: signature.maxForecastHour, skipMissing: signature.skipMissing)
+            let nConcurrent = signature.concurrent ?? 1
+            try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
+            break
         }
         
         logger.info("Finished in \(start.timeElapsedPretty())")
         if let uploadS3Bucket = signature.uploadS3Bucket {
-            try domain.domainRegistry.syncToS3(bucket: uploadS3Bucket, variables: variables)
+            try domain.domainRegistry.syncToS3(
+                bucket: uploadS3Bucket,
+                variables: signature.uploadS3OnlyProbabilities ? [ProbabilityVariable.precipitation_probability] : variables
+            )
         }
     }
     
@@ -177,12 +192,12 @@ struct GfsDownload: AsyncCommand {
     }
     
     /// download GFS025 and NAM CONUS
-    func downloadGfs(application: Application, domain: GfsDomain, run: Timestamp, variables: [any GfsVariableDownloadable], secondFlush: Bool, maxForecastHour: Int?) async throws -> [GenericVariableHandle] {
+    func downloadGfs(application: Application, domain: GfsDomain, run: Timestamp, variables: [any GfsVariableDownloadable], secondFlush: Bool, maxForecastHour: Int?, skipMissing: Bool) async throws -> [GenericVariableHandle] {
         let logger = application.logger
         
         // GFS025 ensemble does not have elevation information, use non-ensemble version
         let elevationUrl = (domain == .gfs025_ens ? GfsDomain.gfs025 : domain).getGribUrl(run: run, forecastHour: 0, member: 0)
-        if domain != .hrrr_conus_15min {
+        if ![GfsDomain.hrrr_conus_15min, .gfswave025, .gfswave025_ens].contains(domain) {
             // 15min hrrr data uses hrrr domain elevation files
             try await downloadNcepElevation(application: application, url: elevationUrl, surfaceElevationFileOm: domain.surfaceElevationFileOm, grid: domain.grid, isGlobal: domain.isGlobal)
         }
@@ -191,7 +206,7 @@ struct GfsDownload: AsyncCommand {
         switch domain {
         case .gfs013:
             deadLineHours = 6
-        case .gfs025:
+        case .gfs025, .gfswave025:
             deadLineHours = 5
         case .hrrr_conus_15min:
             deadLineHours = 2
@@ -199,7 +214,7 @@ struct GfsDownload: AsyncCommand {
             deadLineHours = 2
         case .gfs025_ensemble:
             deadLineHours = 8
-        case .gfs025_ens:
+        case .gfs025_ens, .gfswave025_ens:
             deadLineHours = 8
         case .gfs05_ens:
             deadLineHours = secondFlush ? 16 : 8
@@ -233,7 +248,7 @@ struct GfsDownload: AsyncCommand {
                 }))
                 
                 let url = domain.getGribUrl(run: run, forecastHour: forecastHour, member: 0)
-                for (variable, message) in try await curl.downloadIndexedGrib(url: url, variables: variables) {
+                for (variable, message) in try await curl.downloadIndexedGrib(url: url, variables: variables, errorOnMissing: !skipMissing) {
                     try grib2d.load(message: message)
                     guard let timestep = variable.timestep else {
                         continue
@@ -283,9 +298,12 @@ struct GfsDownload: AsyncCommand {
         /// Keep pressure level temperature in memory to convert pressure vertical velocity (Pa/s) to geometric velocity (m/s)
         let keepVariableInMemoryPressure: [GfsPressureVariableType] = (domain == .hrrr_conus || domain == .gfs05_ens) ? [.temperature] : []
         
+        var previousHour = 0
         for forecastHour in forecastHours {
             logger.info("Downloading forecastHour \(forecastHour)")
             let timestamp = run.add(hours: forecastHour)
+            
+            let storePrecipMembers = VariablePerMemberStorage<GfsSurfaceVariable>()
             
             for member in 0..<nMembers {
                 let variables = (forecastHour == 0 ? variablesHour0 : variables)
@@ -295,7 +313,20 @@ struct GfsDownload: AsyncCommand {
                 var inMemorySurface = [GfsSurfaceVariable: [Float]]()
                 var inMemoryPressure = [GfsPressureVariable: [Float]]()
                 
-                for (variable, message) in try await curl.downloadIndexedGrib(url: url, variables: variables) {
+                for (variable, message) in try await curl.downloadIndexedGrib(url: url, variables: variables, errorOnMissing: !skipMissing) {
+                    if skipMissing {
+                        // for whatever reason, the `hrrr.t10z.wrfprsf01.grib2` file uses different grib dimensions
+                        guard let nx = message.get(attribute: "Nx").map(Int.init) ?? nil else {
+                            fatalError("Could not get Nx")
+                        }
+                        guard let ny = message.get(attribute: "Ny").map(Int.init) ?? nil else {
+                            fatalError("Could not get Ny")
+                        }
+                        if domain.grid.nx != nx || domain.grid.ny != ny {
+                            logger.warning("GRIB dimensions (nx=\(nx), ny=\(ny)) do not match domain grid dimensions (nx=\(domain.grid.nx), ny=\(domain.grid.ny)). Skipping")
+                            continue
+                        }
+                    }
                     try grib2d.load(message: message)
                     if domain.isGlobal {
                         grib2d.array.shift180LongitudeAndFlipLatitude()
@@ -380,6 +411,10 @@ struct GfsDownload: AsyncCommand {
                         inMemoryPressure[variable] = grib2d.array.data
                     }
                     
+                    if let variable = variable.variable as? GfsSurfaceVariable, variable == .precipitation {
+                        await storePrecipMembers.set(variable: variable, timestamp: timestamp, member: member, data: grib2d.array)
+                    }
+                    
                     if domain == .gfs013 && variable.variable as? GfsSurfaceVariable == .pressure_msl {
                         // do not write pressure to disk
                         continue
@@ -394,6 +429,17 @@ struct GfsDownload: AsyncCommand {
                     ))
                 }
             }
+            if domain.ensembleMembers > 1 {
+                if let handle = try await storePrecipMembers.calculatePrecipitationProbability(
+                    precipitationVariable: .precipitation,
+                    domain: domain,
+                    timestamp: timestamp,
+                    dtHoursOfCurrentStep: forecastHour - previousHour
+                ) {
+                    handles.append(handle)
+                }
+            }
+            previousHour = forecastHour
         }
         await curl.printStatistics()
         return handles

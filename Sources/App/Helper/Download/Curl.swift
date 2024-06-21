@@ -2,6 +2,7 @@ import Foundation
 import Vapor
 import AsyncHTTPClient
 import CHelper
+import NIOCore
 
 enum CurlError: Error {
     //case noGribMessagesMatch
@@ -75,13 +76,13 @@ final class Curl {
     }
     
     /// Retry download start as many times until deadline is reached. As soon as the HTTP header is sucessfully returned, this function returns the HTTPClientResponse which can then be used to stream data
-    func initiateDownload(url _url: String, range: String?, minSize: Int?, method: HTTPMethod = .GET, cacheDirectory: String? = Curl.cacheDirectory, deadline: Date?, nConcurrent: Int, quiet: Bool = false, waitAfterLastModifiedBeforeDownload: TimeInterval?) async throws -> HTTPClientResponse {
+    func initiateDownload(url _url: String, range: String?, minSize: Int?, method: HTTPMethod = .GET, cacheDirectory: String? = Curl.cacheDirectory, deadline: Date?, nConcurrent: Int, quiet: Bool = false, waitAfterLastModifiedBeforeDownload: TimeInterval?, headers: [(String, String)] = []) async throws -> HTTPClientResponse {
         
         let deadline = deadline ?? self.deadline
         
         // Check in cache
         if let cacheDirectory, method == .GET {
-            return try await initiateDownloadCached(url: _url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, nConcurrent: nConcurrent)
+            return try await initiateDownloadCached(url: _url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, nConcurrent: nConcurrent, headers: headers)
         }
         
         // Ensure sufficient wait time using head requests
@@ -123,13 +124,16 @@ final class Curl {
             if let auth = auth {
                 request.headers.add(name: "Authorization", value: "Basic \(auth)")
             }
+            request.headers.add(contentsOf: self.headers)
             request.headers.add(contentsOf: headers)
             return request
         }()
         
         let timeout = TimeoutTracker(logger: logger, deadline: deadline)
         
+        var i = 0
         while true {
+            i += 1
             do {
                 let response = try await client.execute(request, timeout: .seconds(Int64(readTimeout)))
                 if response.status != .ok && response.status != .partialContent {
@@ -144,6 +148,12 @@ final class Curl {
                 if !self.retryError4xx, case CurlError.downloadFailed(code: let status) = error, (400..<500).contains(status.code), status.code != 401 {
                     logger.error("Download failed with 4xx error, \(error)")
                     throw error
+                }
+                if let ioerror = error as? IOError, [104,54].contains(ioerror.errnoCode) {
+                    /// MeteoFrance API resets the connection very frequently causing large delays in downloading
+                    /// Immediately retry twice, 1s delay for the next 10
+                    try await timeout.check(error: error, delay: i <= 2 ? 0 : i <= 10 ? 1 : nil)
+                    continue
                 }
                 try await timeout.check(error: error)
                 
@@ -230,12 +240,12 @@ final class Curl {
     }
     
     /// Cache all HTTP download in temporary files. Only used for debugging.
-    private func initiateDownloadCached(url: String, range: String?, minSize: Int?, cacheDirectory: String, nConcurrent: Int) async throws -> HTTPClientResponse {
+    private func initiateDownloadCached(url: String, range: String?, minSize: Int?, cacheDirectory: String, nConcurrent: Int, headers: [(String, String)] = []) async throws -> HTTPClientResponse {
         try FileManager.default.createDirectory(atPath: cacheDirectory, withIntermediateDirectories: true)
         //try FileManager.default.deleteFiles(direcotry: cacheDirectory, olderThan: Date().addingTimeInterval(-2*24*3600))
         let cacheFile = cacheDirectory + "/" + SHA256.hash(data: (url + (range ?? "")).data(using: .utf8) ?? Data()).hex
         if !FileManager.default.fileExists(atPath: cacheFile) {
-            try await self.download(url: url, toFile: cacheFile, bzip2Decode: false, range: range, minSize: minSize, cacheDirectory: nil, nConcurrent: nConcurrent)
+            try await self.download(url: url, toFile: cacheFile, bzip2Decode: false, range: range, minSize: minSize, cacheDirectory: nil, nConcurrent: 1, headers: headers)
         }
         guard let data = try FileHandle(forReadingAtPath: cacheFile)?.readToEnd() else {
             fatalError("Could not read cached file")
@@ -247,13 +257,13 @@ final class Curl {
     
     /// Use http-async http client to download and store to file. If the file already exists, it will be deleted before
     /// Data is first downloaded to a tempoary tilde file and then moved to its final location atomically
-    func download(url: String, toFile: String, bzip2Decode: Bool, range: String? = nil, minSize: Int? = nil, cacheDirectory: String? = Curl.cacheDirectory, nConcurrent: Int = 1, deadLineHours: Double? = nil) async throws {
+    func download(url: String, toFile: String, bzip2Decode: Bool, range: String? = nil, minSize: Int? = nil, cacheDirectory: String? = Curl.cacheDirectory, nConcurrent: Int = 1, deadLineHours: Double? = nil, headers: [(String, String)] = []) async throws {
         let deadline = deadLineHours.map { Date().addingTimeInterval(TimeInterval($0 * 3600)) } ?? deadline
         let timeout = TimeoutTracker(logger: logger, deadline: deadline)
         let fileTemp = "\(toFile)~"
         while true {
             // Start the download and wait for the header
-            let response = try await initiateDownload(url: url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, deadline: deadline, nConcurrent: nConcurrent, waitAfterLastModifiedBeforeDownload: waitAfterLastModifiedBeforeDownload)
+            let response = try await initiateDownload(url: url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, deadline: deadline, nConcurrent: nConcurrent, waitAfterLastModifiedBeforeDownload: waitAfterLastModifiedBeforeDownload, headers: headers)
             
             // Retry failed file transfers after this point
             do {

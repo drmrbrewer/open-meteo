@@ -66,7 +66,7 @@ struct MeteoFranceDownload: AsyncCommand {
                 
         try await downloadElevation2(application: context.application, domain: domain, run: run)
         let handles = try await download2(application: context.application, domain: domain, run: run, variables: variables)
-        try GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, nMembers: 1, handles: handles)
+        try GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles)
         //try convert(logger: logger, domain: domain, variables: variables, run: run, createNetcdf: signature.createNetcdf)
         logger.info("Finished in \(start.timeElapsedPretty())")
         
@@ -85,10 +85,10 @@ struct MeteoFranceDownload: AsyncCommand {
             return
         }
         try domain.surfaceElevationFileOm.createDirectory()
-        guard let apikey = Environment.get("METEOFRANCE_API_KEY") else {
+        guard let apikey = Environment.get("METEOFRANCE_API_KEY")?.split(separator: ",").map(String.init) else {
             fatalError("Please specify environment variable 'METEOFRANCE_API_KEY'")
         }
-        let curl = Curl(logger: logger, client: application.dedicatedHttpClient, headers: [("apikey", apikey)])
+        let curl = Curl(logger: logger, client: application.dedicatedHttpClient, headers: [("apikey", apikey.randomElement() ?? "")])
         let runTime = "\(run.iso8601_YYYY_MM_dd)T\(run.hour.zeroPadded(len: 2)).00.00Z"
         let subsetGrid = domain.mfSubsetGrid
         let url = "https://public-api.meteofrance.fr/public/\(domain.family.rawValue)/1.0/wcs/\(domain.mfApiName)-WCS/GetCoverage?service=WCS&version=2.0.1&coverageid=GEOMETRIC_HEIGHT__GROUND_OR_WATER_SURFACE___\(runTime)\(subsetGrid)&subset=time(0)&format=application%2Fwmo-grib"
@@ -109,15 +109,15 @@ struct MeteoFranceDownload: AsyncCommand {
     }
     
     func download2(application: Application, domain: MeteoFranceDomain, run: Timestamp, variables: [MeteoFranceVariableDownloadable]) async throws -> [GenericVariableHandle] {
-        guard let apikey = Environment.get("METEOFRANCE_API_KEY") else {
+        guard let apikey = Environment.get("METEOFRANCE_API_KEY")?.split(separator: ",").map(String.init) else {
             fatalError("Please specify environment variable 'METEOFRANCE_API_KEY'")
         }
         let logger = application.logger
-        let deadLineHours: Double = domain == .arpege_europe && run.hour == 12 ? 5.9 : 5
-        Process.alarm(seconds: Int(deadLineHours+2) * 3600)
+        let deadLineHours: Double = 5.5
+        Process.alarm(seconds: Int(deadLineHours+1) * 3600)
         defer { Process.alarm(seconds: 0) }
         
-        let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, headers: [("apikey", apikey)])
+        
         let grid = domain.grid
         var grib2d = GribArray2D(nx: grid.nx, ny: grid.ny)
         let subsetGrid = domain.mfSubsetGrid
@@ -144,12 +144,18 @@ struct MeteoFranceDownload: AsyncCommand {
                 let period = coverage.isPeriod ? domain.dtSeconds == 900 ? "_PT15M" : is3H ? "_PT3H" : "_PT1H" : ""
                 
                 let url = "https://public-api.meteofrance.fr/public/\(domain.family.rawValue)/1.0/wcs/\(domain.mfApiName)-WCS/GetCoverage?service=WCS&version=2.0.1&coverageid=\(coverage.variable)___\(runTime)\(period)\(subsetGrid)\(subsetHeight)\(subsetPressure)\(subsetTime)&format=application%2Fwmo-grib"
-                let message = try await curl.downloadGrib(url: url, bzip2Decode: false)[0]
+                
+                /// MeteoFrance servers close the HTTP connection unclean, resulting in `connection reset by peer` errors
+                /// Use a new HTTP client with new connections for every request
+                let client = application.makeNewHttpClient()
+                let curl = Curl(logger: logger, client: client, deadLineHours: deadLineHours, waitAfterLastModified: TimeInterval(2*60))
+                let message = try await curl.downloadGrib(url: url, bzip2Decode: false, headers: [("apikey", apikey.randomElement() ?? "")])[0]
                 
                 //try message.debugGrid(grid: grid, flipLatidude: true, shift180Longitude: true)
                 //message.dumpAttributes()
                 
                 try grib2d.load(message: message)
+                try await client.shutdown()
                 if domain.isGlobal {
                     grib2d.array.shift180LongitudeAndFlipLatitude()
                 } else {
@@ -166,9 +172,10 @@ struct MeteoFranceDownload: AsyncCommand {
                     fn: fn,
                     skipHour0: variable.skipHour0(domain: domain)
                 ))
+                
             }
         }
-        await curl.printStatistics()
+        //await curl.printStatistics()
         return handles
     }
 }

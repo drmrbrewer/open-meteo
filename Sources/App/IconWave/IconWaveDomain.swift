@@ -161,7 +161,7 @@ enum IconWaveVariable: String, CaseIterable, GenericVariable, GenericVariableMix
     
     var scalefactor: Float {
         let period: Float = 20 // 0.05s resolution
-        let height: Float = 50 // 0.002m resolution
+        let height: Float = 50 // 0.02m resolution
         let direction: Float = 1
         switch self {
         /*case .windspeed_10m:
@@ -204,7 +204,7 @@ enum IconWaveVariable: String, CaseIterable, GenericVariable, GenericVariableMix
         case .wave_period:
             return .hermite(bounds: 0...Float.infinity)
         case .wave_direction:
-            return .linear
+            return .linearDegrees
         case .wind_wave_height:
             return .linear
         case .wind_wave_period:
@@ -212,7 +212,7 @@ enum IconWaveVariable: String, CaseIterable, GenericVariable, GenericVariableMix
         case .wind_wave_peak_period:
             return .hermite(bounds: 0...Float.infinity)
         case .wind_wave_direction:
-            return .linear
+            return .linearDegrees
         case .swell_wave_height:
             return .linear
         case .swell_wave_period:
@@ -220,7 +220,7 @@ enum IconWaveVariable: String, CaseIterable, GenericVariable, GenericVariableMix
         case .swell_wave_peak_period:
             return .hermite(bounds: 0...Float.infinity)
         case .swell_wave_direction:
-            return .linear
+            return .linearDegrees
         }
     }
 }

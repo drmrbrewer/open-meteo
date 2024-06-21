@@ -10,6 +10,8 @@ enum DomainRegistry: String, CaseIterable {
     case meteofrance_arome_france_hd_15min
     case meteofrance_arpege_europe
     case meteofrance_arpege_world025
+    case meteofrance_wave
+    case meteofrance_currents
     
     case cams_europe
     case cams_global
@@ -29,6 +31,8 @@ enum DomainRegistry: String, CaseIterable {
     
     case ncep_gfs013
     case ncep_gfs025
+    case ncep_gfswave025
+    case ncep_gefswave025
     case ncep_gefs025
     case ncep_gefs025_probability
     case ncep_gefs05
@@ -62,6 +66,8 @@ enum DomainRegistry: String, CaseIterable {
     case ecmwf_ifs025
     case ecmwf_ifs025_ensemble
     case ecmwf_aifs025
+    case ecmwf_wam025
+    case ecmwf_wam025_ensemble
     
     case jma_msm
     case jma_gsm
@@ -101,6 +107,10 @@ enum DomainRegistry: String, CaseIterable {
             return MeteoFranceDomain.arpege_europe
         case .meteofrance_arpege_world025:
             return MeteoFranceDomain.arpege_world
+        case .meteofrance_wave:
+            return MfWaveDomain.mfwave
+        case .meteofrance_currents:
+            return MfWaveDomain.mfcurrents
         case .cams_europe:
             return CamsDomain.cams_europe
         case .cams_global:
@@ -229,6 +239,14 @@ enum DomainRegistry: String, CaseIterable {
             return ArpaeDomain.cosmo_5m
         case .ncep_gfs_graphcast025:
             return GfsGraphCastDomain.graphcast025
+        case .ecmwf_wam025:
+            return EcmwfDomain.wam025
+        case .ecmwf_wam025_ensemble:
+            return EcmwfDomain.wam025_ensemble
+        case .ncep_gfswave025:
+            return GfsDomain.gfswave025
+        case .ncep_gefswave025:
+            return GfsDomain.gfswave025_ens
         }
     }
 }

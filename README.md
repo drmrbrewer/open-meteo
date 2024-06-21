@@ -57,6 +57,9 @@ Apps:
 - [WetBulb](https://github.com/Isma1306/wetbulb-forecast) A simple app that shows you the wetbulb temp 24h forecast and tells you if it is dangerous.
 - [OSS Weather](https://github.com/Akylas/oss-weather) - Multi-model/multi-provider Open Source Android/iOS Weather app
 - [The Weather](https://weather.jamesdinovo.com) A detailed, installable, progressive web application
+- [Lively Weather](https://www.rocksdanister.com/weather) Windows native weather app powered by DirectX12 animations.
+- [PointWx](https://hh.guidocioni.it/pointwx/) Dash application with interactive plots (from beginner-friendly to weather-enthusiast level) easily deployable
+- [MeteoHist](https://yotka.org/meteo-hist) A web app to create interactive temperature and precipitation graphs for places around the world
 
 Repositories:
 - [Captain Cold](https://github.com/cburton-godaddy/captain-cold) Simple Open-Meteo -> Discord integration
@@ -68,6 +71,7 @@ Repositories:
 
 Other:
 - [Menubar Weather](https://www.raycast.com/koinzhang/menubar-weather) A Raycast extension that displays live weather information in your menu bar
+- [MiniPavi](https://www.minipavi.fr/emulminitel/) Vintage French Minitel (a kind of BBS) weather forecast service (type "METEO" keyword on welcome Minitel screen)
 - Contributions welcome!
 
 Do you use Open-Meteo? Please open a pull request and add your repository or app to the list!
