@@ -100,14 +100,18 @@ struct SyncCommand: AsyncCommand {
             let (models, variablesSig) = arg1
             /// Undocumented switch to download all weather variables. This can generate immense traffic!
             let downloadAllVariables = variablesSig.contains("really_download_all_variables")
+            let downloadAllButPressureOncePerDay = variablesSig.contains("really_download_all_but_pressure_once_per_day")
             let downloadAllPreviousDay = variablesSig.contains("really_download_all_previous_day")
             let downloadAllPressureLevel = variablesSig.contains("really_download_all_pressure_levels")
             let downloadAllSurface = variablesSig.contains("really_download_all_surface_levels")
             let variables = downloadAllPreviousDay ? Self.previousDayVariables : variablesSig
             
             let curl = Curl(logger: logger, client: context.application.dedicatedHttpClient, retryError4xx: false)
+            var lastPressureDownloadDate = Timestamp.now().with(hour: 0).add(days: -1)
             
             while true {
+                /// Used for `really_download_all_but_pressure_once_per_day` to download pressure data only once per day
+                let downloadPressureNow = lastPressureDownloadDate != Timestamp.now().with(hour: 0)
                 do {
                     logger.info("Checking for files to with more than \(pastDays) past days data")
                     let newerThan = Timestamp.now().add(-24 * 3600 * pastDays)
@@ -130,6 +134,7 @@ struct SyncCommand: AsyncCommand {
                         let isPressureLevel = variable.contains("hPa")
                         let isSurface = !isPressureLevel && !variable.contains("_previous_day")
                         guard downloadAllVariables ||
+                                (downloadAllButPressureOncePerDay && (!isPressureLevel || downloadPressureNow)) ||
                                 (downloadAllPressureLevel && isPressureLevel) ||
                                 (downloadAllSurface && isSurface) ||
                                 (downloadAllPreviousDay && isPreviousDay) ||
@@ -155,6 +160,8 @@ struct SyncCommand: AsyncCommand {
                         let localFile = "\(OpenMeteo.dataDirectory)/\(pathNoData)"
                         let localDir = String(localFile[localFile.startIndex ..< localFile.lastIndex(of: "/")!])
                         try FileManager.default.createDirectory(atPath: localDir, withIntermediateDirectories: true)
+                        // Another process might be updating this file right now. E.g. Second sync operation
+                        FileManager.default.waitIfFileWasRecentlyModified(at: "~\(localFile)", waitTimeMinutes: 1)
                         try await curl.download(url: client.url.string, toFile: localFile, bzip2Decode: false, deadLineHours: 0.5)
                         if let cacheDirectory = OpenMeteo.cacheDirectory {
                             // Delete cached file, in case cache is active
@@ -181,6 +188,9 @@ struct SyncCommand: AsyncCommand {
                 } catch {
                     logger.critical("Error during sync \(error)")
                     fatalError()
+                }
+                if downloadPressureNow {
+                    lastPressureDownloadDate = Timestamp.now().with(hour: 0)
                 }
             }
             await curl.printStatistics()
