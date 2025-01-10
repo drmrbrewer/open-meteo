@@ -20,13 +20,15 @@ This document lists all required cronjobs to download data. However, downloading
 # GFS
 40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfs025 > ~/log/gfs025.log 2>&1 || cat ~/log/gfs025.log
 40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfs013 > ~/log/gfs013.log 2>&1 || cat ~/log/gfs013.log
-40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfs025_ensemble > ~/log/gfs025_ensemble.log 2>&1 || cat ~/log/gfs025_ensemble.log
 
 # HRRR
 55 * * * * /usr/local/bin/openmeteo-api download-gfs hrrr_conus > ~/log/hrrr_conus.log 2>&1 || cat ~/log/hrrr_conus.log
 55 * * * * /usr/local/bin/openmeteo-api download-gfs hrrr_conus_15min > ~/log/hrrr_conus_15min.log 2>&1 || cat ~/log/hrrr_conus_15min.log
 #40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfs025 --upper-level > ~/log/gfs025_upper-level.log 2>&1 || cat ~/log/gfs025_upper-level.log
 #55 * * * * /usr/local/bin/openmeteo-api download-gfs hrrr_conus --upper-level > ~/log/hrrr_conus_upper-level.log 2>&1 || cat ~/log/hrrr_conus_upper-level.log
+
+# NBM
+55 * * * * /usr/local/bin/openmeteo-api download-nbm nbm_conus > ~/log/nbm_conus.log 2>&1 || cat ~/log/nbm_conus.log
 
 # GEM
 7 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gem gem_hrdps_continental > ~/log/gem_hrdps_continental.log 2>&1 || cat ~/log/gem_hrdps_continental.log
@@ -43,6 +45,11 @@ This document lists all required cronjobs to download data. However, downloading
 0  1,13 * * * /usr/local/bin/openmeteo-api download-ecmwf --concurrent 4 --domain ifs025 > ~/log/ecmwf025.log 2>&1 || cat ~/log/ecmwf025.log
 45  7,19 * * * /usr/local/bin/openmeteo-api download-ecmwf --concurrent 4 --domain aifs025 > ~/log/ecmwfa025.log 2>&1 || cat ~/log/ecmwfa025.log
 0  1,13 * * * /usr/local/bin/openmeteo-api download-ecmwf --concurrent 4 --domain aifs025 > ~/log/ecmwfa025.log 2>&1 || cat ~/log/ecmwfa025.log
+
+# UK Met Office
+0 3,9,15,19 * * * /usr/local/bin/openmeteo-api download-ukmo global_deterministic_10km --surface --pressure --height > ~/log/ukmo_global.log 2>&1 || cat ~/log/ukmo_global.log
+0 1-23/2 * * * /usr/local/bin/openmeteo-api download-ukmo uk_deterministic_2km --surface --pressure --height > ~/log/ukmo_uk.log 2>&1 || cat ~/log/ukmo_uk.log
+0 */2 * * * /usr/local/bin/openmeteo-api download-ukmo uk_deterministic_2km --surface --pressure --height > ~/log/ukmo_uk2.log 2>&1 || cat ~/log/ukmo_uk2.log
 
 # metno
 27 * * * * /usr/local/bin/openmeteo-api download-metno nordic_pp > ~/log/nordic_pp.log 2>&1 || cat ~/log/nordic_pp.log
@@ -62,6 +69,7 @@ This document lists all required cronjobs to download data. However, downloading
 #15 3,9,15,21 * * * bash -c "source ~/mfkey.env; /usr/local/bin/openmeteo-api download-meteofrance arpege_europe --upper-level > ~/log/arpege_europe_upper-level.log 2>&1 || cat ~/log/arpege_europe_upper-level.log"
 17 * * * * bash -c "source ~/mfkey.env; /usr/local/bin/openmeteo-api download-meteofrance arome_france_15min > ~/log/arome_france_15min.log 2>&1 || cat ~/log/arome_france_15min.log"
 17 * * * * bash -c "source ~/mfkey.env; /usr/local/bin/openmeteo-api download-meteofrance arome_france_hd_15min > ~/log/arome_france_hd_15min.log 2>&1 || cat ~/log/arome_france_hd_15min.log"
+15 9,21 * * * bash -c "source ~/mfkey.env; /usr/local/bin/openmeteo-api download-meteofrance arpege_europe_probabilities > ~/log/arpege_europe_probabilities.log 2>&1 || cat ~/log/arpege_europe_probabilities.log"
 
 # JMA
 #30 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-jma gsm --server "xxxxxxxx" > ~/log/jma_gsm.log 2>&1 || cat ~/log/jma_gsm.log
@@ -121,8 +129,8 @@ Notes:
 - ECMWF IFS requires an ECMWF API account. This is not publicly available and involves licenses cost.
 
 ```bash
-30 0 * * * /usr/local/bin/openmeteo-api download-era5 era5 --cdskey 10xxxx:8exxxxxxx > ~/log/era5.log 2>&1 || cat ~/log/era5.log
-0  0 * * * /usr/local/bin/openmeteo-api download-era5 era5_land --cdskey 10xxxx:8exxxxxxx > ~/log/era5_land.log 2>&1 || cat ~/log/era5_land.log
+30 0 * * * /usr/local/bin/openmeteo-api download-era5 era5 --cdskey xxxxxx-xxxx-xxx... > ~/log/era5.log 2>&1 || cat ~/log/era5.log
+0  0 * * * /usr/local/bin/openmeteo-api download-era5 era5_land --cdskey xxxxxx-xxxx-xxx... > ~/log/era5_land.log 2>&1 || cat ~/log/era5_land.log
 1  1 * * * /usr/local/bin/openmeteo-api download-era5 ecmwf_ifs --cdskey xxxxxxx --email xxxxxxxx > ~/log/ecmwf_archive.log 2>&1 || cat ~/log/ecmwf_archive.log
 ```
 
@@ -137,7 +145,7 @@ Note:
 30  3,15 * * * /usr/local/bin/openmeteo-api download-iconwave ewam > ~/log/iconwave_ewam.log 2>&1 || cat ~/log/iconwave_ewam.log
 
 # ERA5 Ocean
-30 0 * * * /usr/local/bin/openmeteo-api download-era5 era5_ocean --only-variables wave_height,wave_direction,wave_period --cdskey 10xxxx:8ecxxxx > ~/log/era5_ocean.log 2>&1 || cat ~/log/era5_ocean.log
+30 0 * * * /usr/local/bin/openmeteo-api download-era5 era5_ocean --only-variables wave_height,wave_direction,wave_period --cdskey xxxxxx-xxxx-xxx... > ~/log/era5_ocean.log 2>&1 || cat ~/log/era5_ocean.log
 
 # ECMWF WAM
 45  7,19 * * * /usr/local/bin/openmeteo-api download-ecmwf --concurrent 4 --domain wam025 > ~/log/ecmwf_wam025.log 2>&1 || cat ~/log/ecmwf_wam025.log
@@ -151,6 +159,7 @@ Note:
 
 # GFS Wave
 40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfswave025 > ~/log/gfswave025.log 2>&1 || cat ~/log/gfswave025.log
+40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfswave016 > ~/log/gfswave016.log 2>&1 || cat ~/log/gfswave016.log
 40 3,9,15,21 * * * /usr/local/bin/openmeteo-api download-gfs gfswave025_gfs > ~/log/gfswave025_gfs.log 2>&1 || cat ~/log/gfswave025_gfs.log
 ```
 
@@ -161,7 +170,9 @@ Note:
 
 ```bash
 30 8,20 * * * /usr/local/bin/openmeteo-api download-cams cams_global --ftpuser xxxxx --ftppassword xxxxx > ~/log/cams_global.log 2>&1 || cat ~/log/cams_global.log
-30 9 * * * /usr/local/bin/openmeteo-api download-cams cams_europe --cdskey 10xxxx:2bb439xxxxxx > ~/log/cams_europe.log 2>&1 || cat ~/log/cams_europe.log
+30 9 * * * /usr/local/bin/openmeteo-api download-cams cams_europe --cdskey xxxxxx-xxxx-xxx... > ~/log/cams_europe.log 2>&1 || cat ~/log/cams_europe.log
+30 9 * * * /usr/local/bin/openmeteo-api download-cams cams_global_greenhouse_gases --cdskey xxxxxx-xxxx-xxx... > ~/log/cams_global_greenhouse_gases.log 2>&1 || cat ~/log/cams_global_greenhouse_gases.log
+
 ```
 
 ## Floods

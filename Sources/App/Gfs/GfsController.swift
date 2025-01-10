@@ -54,6 +54,7 @@ enum GfsVariableDerivedSurface: String, CaseIterable, GenericVariableMixable {
     case latent_heatflux
     case windgusts_10m
     case freezinglevel_height
+    case mass_density_8m
     
     case sunshine_duration
     
@@ -293,12 +294,11 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 try prefetchData(raw: .surface(.wind_u_component_10m), time: time)
                 try prefetchData(raw: .surface(.wind_v_component_10m), time: time)
             case .rain:
-                try prefetchData(raw: .surface(.frozen_precipitation_percent), time: time)
+                try prefetchData(raw: .surface(.snowfall_water_equivalent), time: time)
                 try prefetchData(raw: .surface(.precipitation), time: time)
                 try prefetchData(raw: .surface(.showers), time: time)
             case .snowfall:
-                try prefetchData(raw: .surface(.frozen_precipitation_percent), time: time)
-                try prefetchData(raw: .surface(.precipitation), time: time)
+                try prefetchData(raw: .surface(.snowfall_water_equivalent), time: time)
             case .surface_pressure:
                 try prefetchData(raw: .surface(.pressure_msl), time: time)
                 try prefetchData(raw: .surface(.temperature_2m), time: time)
@@ -362,6 +362,8 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 try prefetchData(raw: .surface(.freezing_level_height), time: time)
             case .sunshine_duration:
                 try prefetchData(derived: .surface(.direct_radiation), time: time)
+            case .mass_density_8m:
+                try prefetchData(derived: .surface(.mass_density_8m), time: time)
             }
         case .pressure(let v):
             switch v.variable {
@@ -477,20 +479,16 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 }
                 return DataAndUnit(et0, .millimetre)
             case .snowfall:
-                let frozen_precipitation_percent = try get(raw: .surface(.frozen_precipitation_percent), time: time).data
-                let precipitation = try get(raw: .surface(.precipitation), time: time).data
-                let snowfall = zip(frozen_precipitation_percent, precipitation).map({
-                    max($0/100 * $1 * 0.7, 0)
-                })
+                let snowfall_water_equivalent = try get(raw: .surface(.snowfall_water_equivalent), time: time).data
+                let snowfall = snowfall_water_equivalent.map({ $0 * 0.7 })
                 return DataAndUnit(snowfall, SiUnit.centimetre)
             case .rain:
-                let frozen_precipitation_percent = try get(raw: .surface(.frozen_precipitation_percent), time: time).data
+                let snowfall_water_equivalent = try get(raw: .surface(.snowfall_water_equivalent), time: time).data
                 let precipitation = try get(raw: .surface(.precipitation), time: time).data
                 let showers = try get(raw: .surface(.showers), time: time).data
-                let rain = zip(frozen_precipitation_percent, zip(precipitation, showers)).map({ (frozen_precipitation_percent, arg1) in
+                let rain = zip(snowfall_water_equivalent, zip(precipitation, showers)).map({ (snowfall_water_equivalent, arg1) in
                     let (precipitation, showers) = arg1
-                    let snowfallWaterEqivalent = max(min(frozen_precipitation_percent/100,1),0) * precipitation
-                    return max(precipitation - snowfallWaterEqivalent - showers, 0)
+                    return max(precipitation - snowfall_water_equivalent - showers, 0)
                 })
                 return DataAndUnit(rain, .millimetre)
             case .relativehumidity_2m:
@@ -520,8 +518,8 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 let dni = Zensun.calculateBackwardsDNI(directRadiation: dhi, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
                 return DataAndUnit(dni, .wattPerSquareMetre)
             case .direct_normal_irradiance_instant:
-                let direct = try get(derived: .surface(.direct_radiation_instant), time: time)
-                let dni = Zensun.calculateInstantDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
+                let direct = try get(derived: .surface(.direct_radiation), time: time)
+                let dni = Zensun.calculateBackwardsDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time, convertToInstant: true)
                 return DataAndUnit(dni, direct.unit)
             case .direct_radiation:
                 let diffuse = try get(raw: .surface(.diffuse_radiation), time: time)
@@ -583,6 +581,8 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 return try get(raw: .surface(.wind_gusts_10m), time: time)
             case .freezinglevel_height:
                 return try get(raw: .surface(.freezing_level_height), time: time)
+            case .mass_density_8m:
+                return try get(raw: .surface(.mass_density_8m), time: time)
             case .sunshine_duration:
                 let directRadiation = try get(derived: .surface(.direct_radiation), time: time)
                 let duration = Zensun.calculateBackwardsSunshineDuration(directRadiation: directRadiation.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)

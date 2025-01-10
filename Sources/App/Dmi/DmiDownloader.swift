@@ -1,6 +1,6 @@
 import Foundation
 import Vapor
-import SwiftPFor2D
+import OmFileFormat
 import SwiftEccodes
 
 struct DmiDownload: AsyncCommand {
@@ -41,13 +41,8 @@ struct DmiDownload: AsyncCommand {
                 
         let handles = try await download(application: context.application, domain: domain, run: run, concurrent: nConcurrent, maxForecastHour: signature.maxForecastHour)
         
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
         logger.info("Finished in \(start.timeElapsedPretty())")
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.rawValue })
-            try domain.domainRegistry.syncToS3(bucket: uploadS3Bucket, variables: variables)
-        }
     }
 
     /// Temporarily keep those varibles to derive others
@@ -124,8 +119,6 @@ struct DmiDownload: AsyncCommand {
         defer { Process.alarm(seconds: 0) }
         
         let grid = domain.grid
-        let nMembers = domain.ensembleMembers
-        let nLocationsPerChunk = OmFileSplitter(domain, nMembers: nMembers, chunknLocations: nMembers > 1 ? nMembers : nil).nLocationsPerChunk
         
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, waitAfterLastModified: TimeInterval(2*60))
         
@@ -199,16 +192,29 @@ struct DmiDownload: AsyncCommand {
                         return nil // skip precipitation at timestep 0
                     }
                     
-                    let writer = OmFileWriter(dim0: 1, dim1: grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                    let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                     var grib2d = GribArray2D(nx: grid.nx, ny: grid.ny)
                     try grib2d.load(message: message)
                     
                     //try message.debugGrid(grid: domain.grid, flipLatidude: false, shift180Longitude: false)
                     //fatalError()
                     
-                    if let variable = variable as? DmiSurfaceVariable, [DmiSurfaceVariable.shortwave_radiation, .direct_radiation].contains(variable) {
-                        // GRIB unit says W/m2, but it's J/s
-                        grib2d.array.data.multiplyAdd(multiply: 1/3600, add: 0)
+                    if let variable = variable as? DmiSurfaceVariable {
+                        switch variable {
+                        case .shortwave_radiation, .direct_radiation:
+                            // GRIB unit says W/m2, but it's J/s
+                            grib2d.array.data.multiplyAdd(multiply: 1/3600, add: 0)
+                        case .cloud_top, .cloud_base:
+                            // Cloud base and top mark "no clouds" as NaN
+                            // Set it to 0 to work with conversion
+                            for i in grib2d.array.data.indices {
+                                if grib2d.array.data[i].isNaN {
+                                    grib2d.array.data[i] = 0
+                                }
+                            }
+                        default:
+                            break
+                        }
                     }
                     
                     switch unit {
@@ -233,14 +239,14 @@ struct DmiDownload: AsyncCommand {
                         return nil
                     }
                     
-                    let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: grib2d.array.data)
-                    return GenericVariableHandle(variable: variable, time: timestamp, member: member, fn: fn, skipHour0: stepType == "accum" || stepType == "avg")
+                    let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: grib2d.array.data)
+                    return GenericVariableHandle(variable: variable, time: timestamp, member: member, fn: fn)
                 }.collect().compactMap({$0})
                 
                 previous = previousScoped
                 
                 logger.info("Calculating wind speed and direction from U/V components and correcting for true north")
-                let writer = OmFileWriter(dim0: 1, dim1: grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 let windHandles = [
                     try await inMemory.calculateWindSpeed(u: .u50, v: .v50, outSpeedVariable: DmiSurfaceVariable.wind_speed_50m, outDirectionVariable: DmiSurfaceVariable.wind_direction_50m, writer: writer, trueNorth: trueNorth),
                     try await inMemory.calculateWindSpeed(u: .u100, v: .v100, outSpeedVariable: DmiSurfaceVariable.wind_speed_100m, outDirectionVariable: DmiSurfaceVariable.wind_direction_100m, writer: writer, trueNorth: trueNorth),
@@ -328,8 +334,8 @@ struct DmiDownload: AsyncCommand {
             return DmiSurfaceVariable.temperature_150m
         case ("t", "heightAboveGround", "250"):
             return DmiSurfaceVariable.temperature_250m
-        case ("sd", "heightAboveGround", "0"):
-            return DmiSurfaceVariable.snow_depth_water_equivalent // ok
+        //case ("sd", "heightAboveGround", "0"):
+            //return DmiSurfaceVariable.snow_depth_water_equivalent // ok
         case ("grad", "heightAboveGround", "0"):
             return DmiSurfaceVariable.shortwave_radiation // ok
         case ("dswrf", "heightAboveGround", "0"):

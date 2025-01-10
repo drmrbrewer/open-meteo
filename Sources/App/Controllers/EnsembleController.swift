@@ -13,10 +13,10 @@ public struct EnsembleApiController {
         let params = req.method == .POST ? try req.content.decode(ApiQueryParameter.self) : try req.query.decode(ApiQueryParameter.self)
         try await req.ensureApiKey("ensemble-api", apikey: params.apikey)
         let currentTime = Timestamp.now()
-        let allowedRange = Timestamp(2023, 4, 1) ..< currentTime.add(86400 * 35)
+        let allowedRange = Timestamp(2023, 4, 1) ..< currentTime.add(86400 * 36)
         
         let domains = try EnsembleMultiDomains.load(commaSeparatedOptional: params.models) ?? [.gfs_seamless]
-        let prepared = try GenericReaderMulti<EnsembleVariable, EnsembleMultiDomains>.prepareReaders(domains: domains, params: params, currentTime: currentTime, forecastDayDefault: 7, forecastDaysMax: 35, pastDaysMax: 92, allowedRange: allowedRange)
+        let prepared = try GenericReaderMulti<EnsembleVariable, EnsembleMultiDomains>.prepareReaders(domains: domains, params: params, currentTime: currentTime, forecastDayDefault: 7, forecastDaysMax: 36, pastDaysMax: 92, allowedRange: allowedRange)
         
         let paramsHourly = try EnsembleVariableWithoutMember.load(commaSeparatedOptional: params.hourly)
         let nVariables = (paramsHourly?.count ?? 0) * domains.reduce(0, {$0 + $1.countEnsembleMember})
@@ -30,7 +30,11 @@ public struct EnsembleApiController {
                 guard let reader = try readerAndDomain.reader() else {
                     return nil
                 }
+                let hourlyDt = (params.temporal_resolution ?? .hourly).dtSeconds ?? reader.modelDtSeconds
+                let timeHourlyRead = time.hourlyRead.with(dtSeconds: hourlyDt)
+                let timeHourlyDisplay = time.hourlyDisplay.with(dtSeconds: hourlyDt)
                 let domain = readerAndDomain.domain
+                
                 return .init(
                     model: domain,
                     latitude: reader.modelLat,
@@ -40,7 +44,7 @@ public struct EnsembleApiController {
                         if let hourlyVariables = paramsHourly {
                             for variable in hourlyVariables {
                                 for member in 0..<reader.domain.countEnsembleMember {
-                                    try reader.prefetchData(variable: variable, time: time.hourlyRead.toSettings(ensembleMemberLevel: member))
+                                    try reader.prefetchData(variable: variable, time: timeHourlyRead.toSettings(ensembleMemberLevel: member))
                                 }
                             }
                         }
@@ -48,18 +52,18 @@ public struct EnsembleApiController {
                     current: nil,
                     hourly: paramsHourly.map { variables in
                         return {
-                            return .init(name: "hourly", time: time.hourlyDisplay, columns: try variables.map { variable in
+                            return .init(name: "hourly", time: timeHourlyDisplay, columns: try variables.map { variable in
                                 var unit: SiUnit? = nil
                                 let allMembers: [ApiArray] = try (0..<reader.domain.countEnsembleMember).compactMap { member in
-                                    guard let d = try reader.get(variable: variable, time: time.hourlyRead.toSettings(ensembleMemberLevel: member))?.convertAndRound(params: params) else {
+                                    guard let d = try reader.get(variable: variable, time: timeHourlyRead.toSettings(ensembleMemberLevel: member))?.convertAndRound(params: params) else {
                                         return nil
                                     }
                                     unit = d.unit
-                                    assert(time.hourlyRead.count == d.data.count)
+                                    assert(timeHourlyRead.count == d.data.count)
                                     return ApiArray.float(d.data)
                                 }
                                 guard allMembers.count > 0 else {
-                                    return ApiColumn(variable: variable.resultVariable, unit: .undefined, variables: .init(repeating: ApiArray.float([Float](repeating: .nan, count: time.hourlyRead.count)), count: reader.domain.countEnsembleMember))
+                                    return ApiColumn(variable: variable.resultVariable, unit: .undefined, variables: .init(repeating: ApiArray.float([Float](repeating: .nan, count: timeHourlyRead.count)), count: reader.domain.countEnsembleMember))
                                 }
                                 return .init(variable: variable.resultVariable, unit: unit ?? .undefined, variables: allMembers)
                             })
@@ -82,12 +86,14 @@ public struct EnsembleApiController {
 }
 
 extension EnsembleVariableWithoutMember {
-    var resultVariable: ForecastapiResult<EnsembleMultiDomains>.SurfaceAndPressureVariable {
+    var resultVariable: ForecastapiResult<EnsembleMultiDomains>.SurfacePressureAndHeightVariable {
         switch self {
         case .pressure(let p):
             return .pressure(.init(p.variable, p.level))
         case .surface(let s):
             return .surface(s)
+        case .height(let s):
+            return .height(.init(s.variable, s.level))
         }
     }
 }
@@ -114,13 +120,17 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
     case gfs025
     case gfs05
     
+    case ukmo_global_ensemble_20km
+    
 
     /// Return the required readers for this domain configuration
     /// Note: last reader has highes resolution data
     func getReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) throws -> [any GenericReaderProtocol] {
         switch self {
         case .icon_seamless:
-            return try IconMixer(domains: [.iconEps, .iconEuEps, .iconD2Eps], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
+            /// Note: ICON D2 EPS has been excluded, because it only provides 20 members and noticable different results compared to ICON EU EPS
+            /// See: https://github.com/open-meteo/open-meteo/issues/876
+            return try IconMixer(domains: [.iconEps, .iconEuEps], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
         case .icon_global:
             return try IconReader(domain: .iconEps, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .icon_eu:
@@ -141,6 +151,8 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
             return try GemReader(domain: .gem_global_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .bom_access_global_ensemble:
             return try BomReader(domain: .access_global_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
+        case .ukmo_global_ensemble_20km:
+            return try UkmoReader(domain: .global_ensemble_20km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         }
     }
     
@@ -169,6 +181,8 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
             return GemDomain.gem_global_ensemble.ensembleMembers
         case .bom_access_global_ensemble:
             return BomDomain.access_global_ensemble.ensembleMembers
+        case .ukmo_global_ensemble_20km:
+            return UkmoDomain.global_ensemble_20km.ensembleMembers
         }
     }
     
@@ -294,7 +308,7 @@ struct EnsemblePressureVariable: PressureVariableRespresentable, GenericVariable
     }
 }
 
-typealias EnsembleVariableWithoutMember = SurfaceAndPressureVariable<EnsembleSurfaceVariable, EnsemblePressureVariable>
+typealias EnsembleVariableWithoutMember = SurfacePressureAndHeightVariable<EnsembleSurfaceVariable, EnsemblePressureVariable, ForecastHeightVariable>
 
 typealias EnsembleVariable = EnsembleVariableWithoutMember
 

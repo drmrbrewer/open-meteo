@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 /**
  Domain definition for ICON wave models
@@ -50,6 +50,15 @@ enum IconWaveDomain: String, CaseIterable, GenericDomain {
             return RegularGrid(nx: 1440, ny: 699, latMin: -85.25, lonMin: -180, dx: 0.25, dy: 0.25)
         case .ewam:
             return RegularGrid(nx: 526, ny: 721, latMin: 30, lonMin: -10.5, dx: 0.1, dy: 0.05)
+        }
+    }
+    
+    var updateIntervalSeconds: Int {
+        switch self {
+        case .gwam:
+            return 12*3600
+        case .ewam:
+            return 12*3600
         }
     }
     

@@ -7,6 +7,9 @@ protocol CurlIndexedVariable {
     /// Return true, if this index string is matching. Index string looks like `13:520719:d=2022080900:ULWRF:top of atmosphere:anl:`
     /// If nil, this record is ignored
     var gribIndexName: String? { get }
+    
+    /// If true, the exact string needs to match at the end
+    var exactMatch: Bool { get }
 }
 
 extension Curl {
@@ -17,6 +20,7 @@ extension Curl {
         enum LevelType: String, Decodable {
             case sfc
             case pl
+            case sol
         }
         /// pressure or surface level
         let levtype: LevelType
@@ -73,6 +77,9 @@ extension Curl {
                 guard let match = variables.first(where: {
                     guard let gribIndexName = $0.gribIndexName else {
                         return false
+                    }
+                    if $0.exactMatch {
+                        return idx.hasSuffix(gribIndexName)
                     }
                     return idx.contains(gribIndexName)
                 }) else {

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 enum MetNoDomain: String, GenericDomain, CaseIterable {
     case nordic_pp
@@ -46,6 +46,13 @@ enum MetNoDomain: String, GenericDomain, CaseIterable {
         switch self {
         case .nordic_pp:
             return ProjectionGrid(nx: 1796, ny: 2321, latitude: 52.30272...72.18527, longitude: 1.9184653...41.764282, projection: LambertConformalConicProjection(λ0: 15, ϕ0: 63, ϕ1: 63, ϕ2: 63))
+        }
+    }
+    
+    var updateIntervalSeconds: Int {
+        switch self {
+        case .nordic_pp:
+            return 3600
         }
     }
 }

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 
 /**
@@ -58,6 +58,17 @@ enum GemDomain: String, GenericDomain, CaseIterable {
             return false
         case .gem_global_ensemble:
             return true
+        }
+    }
+    
+    var updateIntervalSeconds: Int {
+        switch self {
+        case .gem_global:
+            return 12*3600
+        case .gem_regional, .gem_hrdps_continental:
+            return 6*3600
+        case .gem_global_ensemble:
+            return 12*3600
         }
     }
 

@@ -29,6 +29,8 @@ enum JmaVariableDerivedSurface: String, CaseIterable, GenericVariableMixable {
     case weathercode
     case weather_code
     case snowfall
+    case rain
+    case showers
     case is_day
     case wet_bulb_temperature_2m
     case cloudcover
@@ -185,6 +187,11 @@ struct JmaReader: GenericReaderDerivedSimple, GenericReaderProtocol {
             case .snowfall:
                 try prefetchData(raw: .temperature_2m, time: time)
                 try prefetchData(raw: .precipitation, time: time)
+            case .showers:
+                try prefetchData(raw: .precipitation, time: time)
+            case .rain:
+                try prefetchData(raw: .temperature_2m, time: time)
+                try prefetchData(raw: .precipitation, time: time)
             case .is_day:
                 break
             case .wet_bulb_temperature_2m:
@@ -299,8 +306,8 @@ struct JmaReader: GenericReaderDerivedSimple, GenericReaderProtocol {
                 let dni = Zensun.calculateBackwardsDNI(directRadiation: dhi, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
                 return DataAndUnit(dni, .wattPerSquareMetre)
             case .direct_normal_irradiance_instant:
-                let direct = try get(derived: .surface(.direct_radiation_instant), time: time)
-                let dni = Zensun.calculateInstantDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
+                let direct = try get(derived: .surface(.direct_radiation), time: time)
+                let dni = Zensun.calculateBackwardsDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time, convertToInstant: true)
                 return DataAndUnit(dni, direct.unit)
             case .diffuse_radiation:
                 let swrad = try get(raw: .shortwave_radiation, time: time)
@@ -340,6 +347,13 @@ struct JmaReader: GenericReaderDerivedSimple, GenericReaderProtocol {
                 let temperature = try get(raw: .temperature_2m, time: time)
                 let precipitation = try get(raw: .precipitation, time: time)
                 return DataAndUnit(zip(temperature.data, precipitation.data).map({ $1 * ($0 >= 0 ? 0 : 0.7) }), .centimetre)
+            case .rain:
+                let temperature = try get(raw: .temperature_2m, time: time)
+                let precipitation = try get(raw: .precipitation, time: time)
+                return DataAndUnit(zip(temperature.data, precipitation.data).map({ $1 * ($0 >= 0 ? 1 : 0) }), .millimetre)
+            case .showers:
+                let precipitation = try get(raw: .precipitation, time: time)
+                return DataAndUnit(precipitation.data.map({min($0, 0)}), precipitation.unit)
             case .is_day:
                 return DataAndUnit(Zensun.calculateIsDay(timeRange: time.time, lat: reader.modelLat, lon: reader.modelLon), .dimensionlessInteger)
             case .wet_bulb_temperature_2m:

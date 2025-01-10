@@ -8,7 +8,7 @@ protocol GfsVariableDownloadable: GenericVariable {
 extension GfsSurfaceVariable: GfsVariableDownloadable {
     func gribIndexName(for domain: GfsDomain, timestep: Int?) -> String? {
         switch domain {
-        case .gfswave025, .gfswave025_ens:
+        case .gfswave025, .gfswave025_ens, .gfswave016:
             return nil
         case .gfs013:
             // gfs013 https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs.20230510/00/atmos/gfs.t00z.sfluxgrbf000.grib2.idx
@@ -72,6 +72,10 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
                 return ":DUVB:surface:"
             case .uv_index_clear_sky:
                 return ":CDUVB:surface:"
+            case .boundary_layer_height:
+                return ":HPBL:surface:"
+            case .total_column_integrated_water_vapour:
+                return ":PWAT:entire atmosphere (considered as a single layer):"
             default:
                 return nil
             }
@@ -171,8 +175,12 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
                 return ":CAPE:surface:"
             case .visibility:
                 return ":VIS:surface:"
-            case .precipitation_probability:
-                return nil
+            case .boundary_layer_height:
+                return ":HPBL:surface:"
+            case .total_column_integrated_water_vapour:
+                return ":PWAT:entire atmosphere (considered as a single layer):"
+            case .mass_density_8m:
+                return ":MASSDEN:8 m above ground:"
             default:
                 return nil
             }
@@ -209,13 +217,6 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
                 return ":VDDSF:surface:\(fcst):"
             case .visibility:
                 return ":VIS:surface:\(fcst):"
-            default:
-                return nil
-            }
-        case .gfs025_ensemble:
-            switch self {
-            case .precipitation_probability:
-                return ":APCP:surface:"
             default:
                 return nil
             }
@@ -356,7 +357,6 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
             }
         }
         switch self {
-        case .precipitation_probability: return true
         case .precipitation: return true
         case .categorical_freezing_rain: return true
         case .sensible_heat_flux: return true
@@ -398,7 +398,7 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
             fallthrough
         case .precipitation:
             switch domain {
-            case .gfswave025, .gfswave025_ens:
+            case .gfswave025, .gfswave025_ens, .gfswave016:
                 return nil
             case .gfs013:
                 fallthrough
@@ -409,8 +409,6 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
             case .hrrr_conus:
                 // precipitation rate per second to hourly precipitation
                 return (Float(domain.dtSeconds), 0)
-            case .gfs025_ensemble:
-                fallthrough
             case .gfs025_ens:
                 fallthrough
             case .gfs05_ens:
@@ -423,6 +421,8 @@ extension GfsSurfaceVariable: GfsVariableDownloadable {
             // 0.025 m2/W to get the uv index
             // compared to https://www.aemet.es/es/eltiempo/prediccion/radiacionuv
             return (18.9 * 0.025, 0)
+        case .mass_density_8m:
+            return (1e9, 0)  // convert kg/m³ to µg/m³
         default:
             return nil
         }
@@ -453,7 +453,7 @@ extension GfsPressureVariable: GfsVariableDownloadable {
             return ":RH:\(level) mb:"
         case .vertical_velocity:
             switch domain {
-            case .gfswave025, .gfswave025_ens:
+            case .gfswave025, .gfswave025_ens, .gfswave016:
                 return nil
             case .gfs013:
                 return nil
@@ -469,8 +469,6 @@ extension GfsPressureVariable: GfsVariableDownloadable {
                 // Converted later while downlading
                 return ":VVEL:\(level) mb:"
             case .gfs025_ens:
-                return nil
-            case .gfs025_ensemble:
                 return nil
             }
         }

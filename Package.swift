@@ -15,10 +15,7 @@ let swiftFlags: [PackageDescription.SwiftSetting] = [
     .when(configuration: .release))
 ]
 
-let cFlags = [PackageDescription.CSetting.unsafeFlags(["-O3", "-fno-math-errno", "-fno-trapping-math", "-freciprocal-math", "-ffp-contract=fast"] + mArch)]
-// Note: Fast math flags reduce performance for compression
-let cFlagsPFor2D = [PackageDescription.CSetting.unsafeFlags(["-O3"] + mArch)]
-let cFlagsPFor = [PackageDescription.CSetting.unsafeFlags(["-O3", "-w"] + mArch)]
+let cFlags = [PackageDescription.CSetting.unsafeFlags(["-O3", "-Wall", "-Werror", "-fno-math-errno", "-fno-trapping-math", "-freciprocal-math", "-ffp-contract=fast"] + mArch)]
 
 /// Conditional support for Apache Arrow Parquet files
 let enableParquet = ProcessInfo.processInfo.environment["ENABLE_PARQUET"] == "TRUE"
@@ -31,10 +28,14 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/vapor/vapor.git", from: "4.89.0"),
         .package(url: "https://github.com/google/flatbuffers.git", from: "24.3.25"),
-        .package(url: "https://github.com/open-meteo/sdk.git", from: "1.11.11"),
+        .package(url: "https://github.com/open-meteo/sdk.git", from: "1.18.0"),
+        .package(url: "https://github.com/open-meteo/om-file-format.git", revision: "076b1d02f310fea57bb8015b37f19488e993ecbc"), // Because unsafe C flags are set, tagged releases cannot be used
+        // .package(path: "../openmeteo-sdk-fork"),  // local forked version
+        //.package(url: "https://github.com/open-meteo/sdk.git", branch: "add_ecmwf_long_window"),
         .package(url: "https://github.com/patrick-zippenfenig/SwiftNetCDF.git", from: "1.1.2"),
         .package(url: "https://github.com/patrick-zippenfenig/SwiftTimeZoneLookup.git", from: "1.0.7"),
         .package(url: "https://github.com/patrick-zippenfenig/SwiftEccodes.git", from: "1.0.1"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.68.0"),
     ] + (enableParquet ? [
         .package(url: "https://github.com/patrick-zippenfenig/SwiftArrowParquet.git", from: "1.0.0")
     ] : []),
@@ -48,8 +49,10 @@ let package = Package(
                 .product(name: "SwiftNetCDF", package: "SwiftNetCDF"),
                 .product(name: "SwiftTimeZoneLookup", package: "SwiftTimeZoneLookup"),
                 .product(name: "SwiftEccodes", package: "SwiftEccodes"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "_NIOFileSystem", package: "swift-nio"),
                 "CHelper",
-                "SwiftPFor2D",
+                .product(name: "OmFileFormat", package: "om-file-format"),
                 "CZlib",
                 "CBz2lib"
             ] + (enableParquet ? [
@@ -80,17 +83,6 @@ let package = Package(
         .testTarget(
             name: "AppTests",
             dependencies: [.target(name: "App")]
-        ),
-        .target(
-            name: "SwiftPFor2D",
-            dependencies: ["CTurboPFor", "CHelper"],
-            cSettings: cFlagsPFor2D,
-            swiftSettings: swiftFlags
-        ),
-        .target(
-            name: "CTurboPFor",
-            cSettings: cFlagsPFor,
-            swiftSettings: swiftFlags
-        ),
+        )
     ]
 )

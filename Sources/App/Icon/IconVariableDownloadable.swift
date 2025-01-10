@@ -192,6 +192,12 @@ extension IconSurfaceVariable: IconVariableDownloadable {
         case .cloud_cover_low: return ("clcl", "single-level", nil)
         case .cloud_cover_mid: return ("clcm", "single-level", nil)
         case .cloud_cover_high: return ("clch", "single-level", nil)
+        case .convective_cloud_top: 
+            let shallowOrDeepConvectionTop = domain == .iconD2 ? "htop_sc" : "htop_con"
+            return (shallowOrDeepConvectionTop, "single-level", nil)
+        case .convective_cloud_base: 
+            let shallowOrDeepConvectionBase = domain == .iconD2 ? "hbas_sc" : "hbas_con"
+            return (shallowOrDeepConvectionBase, "single-level", nil)
         case .precipitation: return ("tot_prec", "single-level", nil)
         case .weather_code: return ("ww", "single-level", nil)
         case .wind_v_component_10m: return ("v_10m", "single-level", nil)
@@ -217,10 +223,7 @@ extension IconSurfaceVariable: IconVariableDownloadable {
         case .updraft:
             return domain == .iconD2 ? ("w_ctmax", "single-level", nil) : nil // only in icon d2
         case .visibility:
-            return nil
-            // 2025-04-29: only available as ICON grid in D2. Not available as regular grid
-            // Still unavailable until 2025-04-25
-            // domain == .icon ? nil : ("vis", "single-level", nil) // not in icon global
+            return domain == .icon ? nil : ("vis", "single-level", nil) // not in icon global
         }
     }
     

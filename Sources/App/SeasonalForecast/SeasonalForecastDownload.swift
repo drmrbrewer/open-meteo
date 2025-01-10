@@ -1,6 +1,6 @@
 import Foundation
 import Vapor
-import SwiftPFor2D
+import OmFileFormat
 import SwiftEccodes
 
 
@@ -193,7 +193,7 @@ fileprivate extension Array2DFastTime {
         let startOm = DispatchTime.now()
         let time = TimerangeDt(start: run, nTime: nTime, dtSeconds: dtSeconds)
         
-        try om.updateFromTimeOriented(variable: "\(variable.rawValue)_member\(member.zeroPadded(len: 2))", array2d: self, time: time, skipFirst: 1, scalefactor: variable.scalefactor, storePreviousForecast: variable.storePreviousForecast)
+        try om.updateFromTimeOriented(variable: "\(variable.rawValue)_member\(member.zeroPadded(len: 2))", array2d: self, time: time, scalefactor: variable.scalefactor)
         logger.info("Update om \(variable) finished in \(startOm.timeElapsedPretty())")
     }
 }

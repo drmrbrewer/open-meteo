@@ -65,15 +65,11 @@ extension GenericReaderMixerRaw {
         reader.last!.targetElevation
     }
     var modelDtSeconds: Int {
-        reader.first!.modelDtSeconds
+        reader.last!.modelDtSeconds
     }
     
     func prefetchData(variable: Reader.MixingVar, time: TimerangeDtAndSettings) throws {
         for reader in reader {
-            if time.dtSeconds > reader.modelDtSeconds {
-                /// 15 minutely domain while reading hourly data
-                continue
-            }
             try reader.prefetchData(variable: variable, time: time)
         }
     }
@@ -95,10 +91,6 @@ extension GenericReaderMixerRaw {
         var unit: SiUnit? = nil
         if variable.requiresOffsetCorrectionForMixing {
             for r in reader.reversed() {
-                if time.dtSeconds > r.modelDtSeconds {
-                    /// 15 minutely domain while reading hourly data
-                    continue
-                }
                 let d = try r.get(variable: variable, time: time)
                 if data == nil {
                     // first iteration
@@ -118,10 +110,6 @@ extension GenericReaderMixerRaw {
         } else {
             // default case, just place new data in 1:1
             for r in reader.reversed() {
-                if time.dtSeconds > r.modelDtSeconds {
-                    /// 15 minutely domain while reading hourly data
-                    continue
-                }
                 let d = try r.get(variable: variable, time: time)
                 if data == nil {
                     // first iteration

@@ -122,6 +122,16 @@ public struct Timestamp: Hashable {
         return IsoDate(timeIntervalSince1970: timeIntervalSince1970)
     }
     
+    public func subtract(days: Int = 0, hours: Int = 0, minutes: Int = 0, seconds: Int = 0) -> Timestamp {
+        let dtSeconds = seconds + minutes * 60 + hours * 3600 + days * 86400
+        return Timestamp(self.timeIntervalSince1970 - dtSeconds)
+    }
+    
+    public func olderThan(days: Int = 0, hours: Int = 0, minutes: Int = 0, seconds: Int = 0) -> Bool {
+        let dtSeconds = seconds + minutes * 60 + hours * 3600 + days * 86400
+        return timeIntervalSince1970 < Timestamp.now().timeIntervalSince1970 - dtSeconds
+    }
+    
     enum Weekday: Int8 {
         case sunday = 0
         case monday = 1
@@ -166,6 +176,19 @@ public struct Timestamp: Hashable {
         return "\(year)-\(month.zeroPadded(len: 2))-\(day.zeroPadded(len: 2))T\(hour.zeroPadded(len: 2))\(minute.zeroPadded(len: 2))"
     }
     
+    /// With format `yyyyMMdd'T'HHmm'`
+    var iso8601_YYYYMMddTHHmm: String {
+        var time = timeIntervalSince1970
+        var t = tm()
+        gmtime_r(&time, &t)
+        let year = Int(t.tm_year+1900)
+        let month = Int(t.tm_mon+1)
+        let day = Int(t.tm_mday)
+        let hour = Int(t.tm_hour)
+        let minute = Int(t.tm_min)
+        return "\(year)\(month.zeroPadded(len: 2))\(day.zeroPadded(len: 2))T\(hour.zeroPadded(len: 2))\(minute.zeroPadded(len: 2))"
+    }
+    
     /// With format `yyyy-MM-dd`
     var iso8601_YYYY_MM_dd: String {
         var time = timeIntervalSince1970
@@ -186,6 +209,17 @@ public struct Timestamp: Hashable {
         let month = Int(t.tm_mon+1)
         let day = Int(t.tm_mday)
         return "\(year)\(month.zeroPadded(len: 2))\(day.zeroPadded(len: 2))"
+    }
+    
+    /// With format `yyyy/MM/dd`
+    var format_directoriesYYYYMMdd: String {
+        var time = timeIntervalSince1970
+        var t = tm()
+        gmtime_r(&time, &t)
+        let year = Int(t.tm_year+1900)
+        let month = Int(t.tm_mon+1)
+        let day = Int(t.tm_mday)
+        return "\(year)/\(month.zeroPadded(len: 2))/\(day.zeroPadded(len: 2))"
     }
     
     /// With format `yyyyMMddHH`
@@ -364,12 +398,12 @@ public extension Sequence where Element == Timestamp {
     var iso8601_YYYYMMddHHmm: [String] {
         var time = 0
         var t = tm()
-        var dateCalculated = -99999
+        var dateCalculated = Int.min
         return map {
             // only do date calculation if the actual date changes
-            if dateCalculated != $0.timeIntervalSince1970 / 86400 {
+            if dateCalculated != $0.timeIntervalSince1970 - $0.timeIntervalSince1970.moduloPositive(86400)  {
                 time = $0.timeIntervalSince1970
-                dateCalculated = $0.timeIntervalSince1970 / 86400
+                dateCalculated = $0.timeIntervalSince1970 - $0.timeIntervalSince1970.moduloPositive(86400)
                 gmtime_r(&time, &t)
             }
             let year = Int(t.tm_year+1900)

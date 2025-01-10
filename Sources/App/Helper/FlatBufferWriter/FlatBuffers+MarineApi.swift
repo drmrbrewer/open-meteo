@@ -32,6 +32,9 @@ extension MarineVariable: FlatBuffersVariable {
             return .init(variable: .oceanCurrentVelocity)
         case .ocean_current_direction:
             return .init(variable: .oceanCurrentDirection)
+        case .wave_peak_period:
+            // TODO register in SDK
+            return .init(variable: .wavePeriod)
         }
     }
 }
@@ -40,7 +43,7 @@ extension IconWaveVariableDaily: FlatBuffersVariable {
     func getFlatBuffersMeta() -> FlatBufferVariableMeta {
         switch self {
         case .wave_height_max:
-            return .init(variable: .windWaveHeight, aggregation: .maximum)
+            return .init(variable: .waveHeight, aggregation: .maximum)
         case .wind_wave_height_max:
             return .init(variable: .windWaveHeight, aggregation: .maximum)
         case .swell_wave_height_max:
@@ -67,11 +70,13 @@ extension IconWaveVariableDaily: FlatBuffersVariable {
 
 extension IconWaveDomainApi: ModelFlatbufferSerialisable {
     typealias HourlyVariable = MarineVariable
-    
+
     typealias HourlyPressureType = ForecastPressureVariableType
     
+    typealias HourlyHeightType = ForecastHeightVariableType
+
     typealias DailyVariable = IconWaveVariableDaily
-    
+
     var flatBufferModel: openmeteo_sdk_Model {
         switch self {
         case.best_match:
@@ -92,6 +97,8 @@ extension IconWaveDomainApi: ModelFlatbufferSerialisable {
             return .meteofranceCurrents
         case .ncep_gfswave025:
             return .ncepGfswave025
+        case .ncep_gfswave016:
+            return .ncepGfswave016
         case .ncep_gefswave025:
             return .ncepGefswave025
         }

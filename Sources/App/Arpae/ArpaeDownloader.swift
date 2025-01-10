@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 import Vapor
 import SwiftEccodes
 import NIOConcurrencyHelpers
@@ -40,12 +40,7 @@ struct DownloadArpaeCommand: AsyncCommand {
 
         let nConcurrent = signature.concurrent ?? 1
         let handles = try await download(application: context.application, domain: domain, run: run, concurrent: nConcurrent)
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.rawValue })
-            try domain.domainRegistry.syncToS3(bucket: uploadS3Bucket, variables: variables)
-        }
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
     }
     
     /// Download an ARPAE model from MISTRAL meteo hub
@@ -58,8 +53,7 @@ struct DownloadArpaeCommand: AsyncCommand {
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours)
         Process.alarm(seconds: Int(deadLineHours + 1) * 3600)
         
-        let nLocationsPerChunk = OmFileSplitter(domain).nLocationsPerChunk
-        let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+        let writer = OmFileSplitter.makeSpatialWriter(domain: domain)
         let previous = GribDeaverager()
         
         let meta = try await waitForRun(curl: curl, domain: domain, run: run)
@@ -96,8 +90,8 @@ struct DownloadArpaeCommand: AsyncCommand {
                     return nil
                 }
                 logger.info("Compressing and writing data to \(timestamp.format_YYYYMMddHH) \(variable)")
-                let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: grib2d.array.data)
-                return GenericVariableHandle(variable: variable, time: timestamp, member: 0, fn: fn, skipHour0: stepType == "accum")
+                let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: grib2d.array.data)
+                return GenericVariableHandle(variable: variable, time: timestamp, member: 0, fn: fn)
             }.collect().compactMap({$0})
         }
         await curl.printStatistics()

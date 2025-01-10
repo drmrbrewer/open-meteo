@@ -10,15 +10,23 @@ enum DomainRegistry: String, CaseIterable {
     case meteofrance_arome_france_hd_15min
     case meteofrance_arpege_europe
     case meteofrance_arpege_world025
+    case meteofrance_arpege_europe_probabilities
+    case meteofrance_arpege_world025_probabilities
     case meteofrance_wave
     case meteofrance_currents
     
     case cams_europe
     case cams_global
+    case cams_global_greenhouse_gases
+    case cams_europe_reanalysis_interim
+    case cams_europe_reanalysis_validated
+    case cams_europe_reanalysis_validated_pre2020
+    case cams_europe_reanalysis_validated_pre2018
     
     case copernicus_dem90
     case copernicus_cerra
     case copernicus_era5
+    case copernicus_era5_ensemble
     case copernicus_era5_daily
     case copernicus_era5_land
     case copernicus_era5_land_daily
@@ -32,14 +40,16 @@ enum DomainRegistry: String, CaseIterable {
     case ncep_gfs013
     case ncep_gfs025
     case ncep_gfswave025
+    case ncep_gfswave016
     case ncep_gefswave025
     case ncep_gefs025
-    case ncep_gefs025_probability
     case ncep_gefs05
     case ncep_hrrr_conus
     case ncep_hrrr_conus_15min
     case ncep_cfsv2
     case ncep_gfs_graphcast025
+    case ncep_nbm_conus
+    case ncep_nbm_alaska
     
     case glofas_consolidated_v4
     case glofas_consolidated_v3
@@ -68,6 +78,9 @@ enum DomainRegistry: String, CaseIterable {
     case ecmwf_aifs025
     case ecmwf_wam025
     case ecmwf_wam025_ensemble
+    case ecmwf_ifs_analysis
+    case ecmwf_ifs_analysis_long_window
+    case ecmwf_ifs_long_window
     
     case jma_msm
     case jma_gsm
@@ -97,6 +110,10 @@ enum DomainRegistry: String, CaseIterable {
     case knmi_harmonie_arome_netherlands
     case dmi_harmonie_arome_europe
     
+    case ukmo_global_deterministic_10km
+    case ukmo_global_ensemble_20km
+    case ukmo_uk_deterministic_2km
+    
     var directory: String {
         return "\(OpenMeteo.dataDirectory)\(rawValue)/"
     }
@@ -111,6 +128,10 @@ enum DomainRegistry: String, CaseIterable {
             return MeteoFranceDomain.arpege_europe
         case .meteofrance_arpege_world025:
             return MeteoFranceDomain.arpege_world
+        case .meteofrance_arpege_europe_probabilities:
+            return MeteoFranceDomain.arpege_europe_probabilities
+        case .meteofrance_arpege_world025_probabilities:
+            return MeteoFranceDomain.arpege_world_probabilities
         case .meteofrance_wave:
             return MfWaveDomain.mfwave
         case .meteofrance_currents:
@@ -119,18 +140,28 @@ enum DomainRegistry: String, CaseIterable {
             return CamsDomain.cams_europe
         case .cams_global:
             return CamsDomain.cams_global
+        case .cams_global_greenhouse_gases:
+            return CamsDomain.cams_global_greenhouse_gases
         case .copernicus_cerra:
             return CdsDomain.cerra
         case .copernicus_dem90:
             return Dem90()
         case .ecmwf_ifs:
             return CdsDomain.ecmwf_ifs
+        case .ecmwf_ifs_analysis_long_window:
+            return CdsDomain.ecmwf_ifs_analysis_long_window
+        case .ecmwf_ifs_analysis:
+            return CdsDomain.ecmwf_ifs_analysis
+        case .ecmwf_ifs_long_window:
+            return CdsDomain.ecmwf_ifs_long_window
         case .copernicus_era5:
             return CdsDomain.era5
         case .copernicus_era5_land:
             return CdsDomain.era5_land
         case .copernicus_era5_ocean:
             return CdsDomain.era5_ocean
+        case .copernicus_era5_ensemble:
+            return CdsDomain.era5_ensemble
         case .dwd_ewam:
             return IconWaveDomain.ewam
         case .cmc_gem_gdps:
@@ -147,8 +178,6 @@ enum DomainRegistry: String, CaseIterable {
             return GfsDomain.gfs025
         case .ncep_gefs025:
             return GfsDomain.gfs025_ens
-        case .ncep_gefs025_probability:
-            return GfsDomain.gfs025_ensemble
         case .ncep_gefs05:
             return GfsDomain.gfs05_ens
         case .glofas_consolidated_v4:
@@ -257,6 +286,26 @@ enum DomainRegistry: String, CaseIterable {
             return KnmiDomain.harmonie_arome_netherlands
         case .dmi_harmonie_arome_europe:
             return DmiDomain.harmonie_arome_europe
+        case .ukmo_global_deterministic_10km:
+            return UkmoDomain.global_deterministic_10km
+        case .ukmo_uk_deterministic_2km:
+            return UkmoDomain.uk_deterministic_2km
+        case .cams_europe_reanalysis_interim:
+            return CamsDomain.cams_europe_reanalysis_interim
+        case .cams_europe_reanalysis_validated:
+            return CamsDomain.cams_europe_reanalysis_validated
+        case .cams_europe_reanalysis_validated_pre2020:
+            return CamsDomain.cams_europe_reanalysis_validated_pre2020
+        case .cams_europe_reanalysis_validated_pre2018:
+            return CamsDomain.cams_europe_reanalysis_validated_pre2018
+        case .ncep_gfswave016:
+            return GfsDomain.gfswave016
+        case .ncep_nbm_conus:
+            return NbmDomain.nbm_conus
+        case .ncep_nbm_alaska:
+            return NbmDomain.nbm_alaska
+        case .ukmo_global_ensemble_20km:
+            return UkmoDomain.global_ensemble_20km
         }
     }
 }

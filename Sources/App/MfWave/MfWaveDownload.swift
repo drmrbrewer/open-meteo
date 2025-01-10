@@ -1,6 +1,6 @@
 import Foundation
 import Vapor
-import SwiftPFor2D
+import OmFileFormat
 import SwiftNetCDF
 
 /**
@@ -50,7 +50,7 @@ struct MfWaveDownload: AsyncCommand {
                     logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
                     return try await download(application: context.application, domain: domain, run: run)
                 }
-                try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: runs.range.lowerBound, handles: handles, concurrent: nConcurrent)
+                try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: runs.range.lowerBound, handles: handles, concurrent: nConcurrent, writeUpdateJson: false, uploadS3Bucket: nil, uploadS3OnlyProbabilities: false)
             }
             return
         }
@@ -59,12 +59,7 @@ struct MfWaveDownload: AsyncCommand {
         logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
         
         let handles = try await download(application: context.application, domain: domain, run: run)
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.rawValue })
-            try domain.domainRegistry.syncToS3(bucket: uploadS3Bucket, variables: variables)
-        }
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
     }
     
     /// Download all timesteps and preliminarily covnert it to compressed files
@@ -76,10 +71,9 @@ struct MfWaveDownload: AsyncCommand {
         defer { Process.alarm(seconds: 0) }
         
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient)
-        let nLocationsPerChunk = OmFileSplitter(domain).nLocationsPerChunk
         let nx = domain.grid.nx
         let ny = domain.grid.ny
-        let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+        let writer = OmFileSplitter.makeSpatialWriter(domain: domain)
         
         /// Only hindcast available after 12 hours
         let isOlderThan12Hours = run.add(hours: 23) < Timestamp.now()
@@ -182,16 +176,15 @@ struct MfWaveDownload: AsyncCommand {
                                     return $0.isNaN ? Float(0) : -999
                                 }
                                 try domain.surfaceElevationFileOm.createDirectory()
-                                try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: domain.surfaceElevationFileOm.getFilePath(), compressionType: .p4nzdec256, scalefactor: 1, all: elevation)
+                                try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: domain.surfaceElevationFileOm.getFilePath(), compressionType: .pfor_delta2d_int16, scalefactor: 1, all: elevation)
                             }
-                            let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: data)
+                            let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: data)
                             // Note: skipHour0 needs still to be set for solar interpolation
                             return GenericVariableHandle(
                                 variable: variable,
                                 time: timestamp,
                                 member: 0,
-                                fn: fn,
-                                skipHour0: false
+                                fn: fn
                             )
                         }
                     }
@@ -220,16 +213,15 @@ struct MfWaveDownload: AsyncCommand {
                                 return $0.isNaN ? Float(0) : -999
                             }
                             try domain.surfaceElevationFileOm.createDirectory()
-                            try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: domain.surfaceElevationFileOm.getFilePath(), compressionType: .p4nzdec256, scalefactor: 1, all: elevation)
+                            try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: domain.surfaceElevationFileOm.getFilePath(), compressionType: .pfor_delta2d_int16, scalefactor: 1, all: elevation)
                         }
-                        let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: data)
+                        let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: data)
                         // Note: skipHour0 needs still to be set for solar interpolation
                         return GenericVariableHandle(
                             variable: variable,
                             time: timestamp,
                             member: 0,
-                            fn: fn,
-                            skipHour0: false
+                            fn: fn
                         )
                     }
                 }.flatMap({$0})

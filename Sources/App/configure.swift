@@ -24,10 +24,15 @@ struct OpenMeteo {
         return dataDirectory
     }()
     
+    /// True if version 3 Om files should be generated. This is incompatible with older version.
+    static var generteOmFilesVersion3: Bool {
+        return Environment.get("VERSION3") == "TRUE"
+    }
+    
     /// Cache all data access using spare files in this directory
-    static var cacheDirectory = {
+    /*static var cacheDirectory = {
         return Environment.get("CACHE_DIRECTORY")
-    }()
+    }()*/
 }
 
 extension Application {
@@ -51,10 +56,10 @@ extension Application {
     }
     
     /// Create a new HTTP client instance. `shutdown` must be called after using it
-    func makeNewHttpClient(httpVersion: HTTPClient.Configuration.HTTPVersion = .automatic) -> HTTPClient {
+    func makeNewHttpClient(httpVersion: HTTPClient.Configuration.HTTPVersion = .automatic, redirectConfiguration: HTTPClient.Configuration.RedirectConfiguration? = nil) -> HTTPClient {
         // try again with very high timeouts, so only the curl internal timers are used
         var configuration = HTTPClient.Configuration(
-            redirectConfiguration: .follow(max: 5, allowCycles: false),
+            redirectConfiguration: redirectConfiguration ?? .follow(max: 5, allowCycles: false),
             timeout: .init(connect: .seconds(30), read: .minutes(5)),
             connectionPool: .init(idleTimeout: .minutes(10)))
         configuration.httpVersion = httpVersion
@@ -80,7 +85,7 @@ public func configure(_ app: Application) throws {
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
     app.commands.use(BenchmarkCommand(), as: "benchmark")
-    app.commands.use(MigrationCommand(), as: "migration")
+    app.asyncCommands.use(MigrationCommand(), as: "migration")
     app.asyncCommands.use(DownloadIconCommand(), as: "download")
     app.asyncCommands.use(DownloadCmaCommand(), as: "download-cma")
     app.asyncCommands.use(DownloadBomCommand(), as: "download-bom")
@@ -93,10 +98,12 @@ public func configure(_ app: Application) throws {
     app.asyncCommands.use(MeteoFranceDownload(), as: "download-meteofrance")
     app.asyncCommands.use(KnmiDownload(), as: "download-knmi")
     app.asyncCommands.use(DmiDownload(), as: "download-dmi")
+    app.asyncCommands.use(UkmoDownload(), as: "download-ukmo")
     app.asyncCommands.use(DownloadArpaeCommand(), as: "download-arpae")
     app.asyncCommands.use(SeasonalForecastDownload(), as: "download-seasonal-forecast")
     app.asyncCommands.use(GfsDownload(), as: "download-gfs")
     app.asyncCommands.use(GfsGraphCastDownload(), as: "download-gfs-graphcast")
+    app.asyncCommands.use(NbmDownload(), as: "download-nbm")
     app.asyncCommands.use(JmaDownload(), as: "download-jma")
     app.asyncCommands.use(MetNoDownloader(), as: "download-metno")
     app.asyncCommands.use(GloFasDownloader(), as: "download-glofas")
@@ -131,6 +138,11 @@ public func configure(_ app: Application) throws {
         initialDelay: .seconds(0),
         delay: .seconds(2),
         OmFileManager.instance.backgroundTask
+    )
+    app.lifecycle.repeatedTask(
+        initialDelay: .seconds(0),
+        delay: .seconds(2),
+        MetaFileManager.instance.backgroundTask
     )
     
     app.lifecycle.repeatedTask(

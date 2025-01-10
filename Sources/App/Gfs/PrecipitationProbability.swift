@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 /**
  Group all probabilities variables for all domains in one enum
@@ -43,7 +43,6 @@ struct ProbabilityReader {
     /// Read probabilities from GFS ensemble models 0.25° and 0.5°
     static func makeGfsReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode) throws -> GenericReaderMixerSameDomain<GenericReader<GfsDomain, ProbabilityVariable>> {
         return GenericReaderMixerSameDomain(reader: [
-            try GenericReader<GfsDomain, ProbabilityVariable>(domain: .gfs025_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode),
             try GenericReader<GfsDomain, ProbabilityVariable>(domain: .gfs05_ens, lat: lat, lon: lon, elevation: elevation, mode: mode),
             try GenericReader<GfsDomain, ProbabilityVariable>(domain: .gfs025_ens, lat: lat, lon: lon, elevation: elevation, mode: mode)
         ].compactMap({$0}))
@@ -63,6 +62,16 @@ struct ProbabilityReader {
             throw ModelError.domainInitFailed(domain: IconDomains.icon.rawValue)
         }
         return reader
+    }
+    
+    /// Reader for probabilities based on NCEP NBM
+    static func makeNbmReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode) throws -> GenericReader<NbmDomain, ProbabilityVariable>? {
+        return try GenericReader<NbmDomain, ProbabilityVariable>(domain: .nbm_conus, lat: lat, lon: lon, elevation: elevation, mode: mode)
+    }
+    
+    /// Reader for probabilities based on MeteoFrance ARPEGE Europe 0.1°
+    static func makeMeteoFranceEuropeReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode) throws -> GenericReader<MeteoFranceDomain, ProbabilityVariable>? {
+        return try GenericReader<MeteoFranceDomain, ProbabilityVariable>(domain: .arpege_europe_probabilities, lat: lat, lon: lon, elevation: elevation, mode: mode)
     }
     
     /// Reader for probabilities based on ICON EU EPS
@@ -129,16 +138,13 @@ extension VariablePerMemberStorage {
         }
         precipitationProbability01.multiplyAdd(multiply: 100/Float(nMember), add: 0)
         let variable = ProbabilityVariable.precipitation_probability
-        /// Do not set `chunknLocations` because only 1 member is stored
-        let nLocationsPerChunk = OmFileSplitter(domain, chunknLocations: nil).nLocationsPerChunk
-        let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
-        let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: precipitationProbability01)
+        let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: 1)
+        let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: precipitationProbability01)
         return GenericVariableHandle(
             variable: variable,
             time: timestamp,
             member: 0,
-            fn: fn,
-            skipHour0: false
+            fn: fn
         )
     }
 }
@@ -173,16 +179,13 @@ extension Array where Element == GenericVariableHandle {
                 previousTimesamp = timestamp
                 precipitationProbability01.multiplyAdd(multiply: 100/Float(nMember), add: 0)
                 let variable = ProbabilityVariable.precipitation_probability
-                /// Do not set `chunknLocations` because only 1 member is stored
-                let nLocationsPerChunk = OmFileSplitter(domain, chunknLocations: nil).nLocationsPerChunk
-                let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
-                let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: precipitationProbability01)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: 1)
+                let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: precipitationProbability01)
                 return GenericVariableHandle(
                     variable: variable,
                     time: timestamp,
                     member: 0,
-                    fn: fn,
-                    skipHour0: false
+                    fn: fn
                 )
             })
     }

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 /**
  Generic domain that is required for the reader
@@ -16,6 +16,9 @@ protocol GenericDomain {
     
     /// Time resoltuion of the deomain. 3600 for hourly, 10800 for 3-hourly
     var dtSeconds: Int { get }
+    
+    /// How often a domain is updated in seconds. `3600` for updates every hour
+    var updateIntervalSeconds: Int { get }
     
     /// If true, domain has yearly files
     var hasYearlyFiles: Bool { get }
@@ -36,7 +39,7 @@ extension GenericDomain {
     }
     
     /// The the file containing static information for elevation of soil types
-    func getStaticFile(type: ReaderStaticVariable) -> OmFileReader<MmapFileCached>? {
+    func getStaticFile(type: ReaderStaticVariable) -> OmFileReader<MmapFile>? {
         guard let domainRegistryStatic else {
             return nil
         }
@@ -50,6 +53,10 @@ extension GenericDomain {
                 .staticFile(domain: domainRegistryStatic, variable: "HSURF", chunk: nil)
             )
         }
+    }
+    
+    func getMetaJson() throws -> ModelUpdateMetaJson? {
+        return try MetaFileManager.get(OmFileManagerReadable.meta(domain: domainRegistry))
     }
     
     /// Filename of the surface elevation file
@@ -101,7 +108,7 @@ enum ReaderInterpolation {
     /// Take the next hour, and devide by `dt` to preserve sums like precipitation
     case backwards_sum
     
-    /// Take the next hour. E.g. used in weathercode, frozen precipitation percent
+    /// Replicate value backwards. E.g. min/max of previous hours
     case backwards
     
     /// How many timesteps on the left and right side are used for interpolation
@@ -113,9 +120,7 @@ enum ReaderInterpolation {
             return 2
         case .solar_backwards_averaged:
             return 2
-        case .backwards_sum:
-            return 1
-        case .backwards:
+        case .backwards_sum, .backwards:
             return 1
         }
     }

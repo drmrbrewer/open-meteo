@@ -140,6 +140,9 @@ struct WeatherApiController {
                 guard let reader = try readerAndDomain.reader() else {
                     return nil
                 }
+                let hourlyDt = (params.temporal_resolution ?? .hourly).dtSeconds ?? reader.modelDtSeconds
+                let timeHourlyRead = time.hourlyRead.with(dtSeconds: hourlyDt)
+                let timeHourlyDisplay = time.hourlyDisplay.with(dtSeconds: hourlyDt)
                 let domain = readerAndDomain.domain
                 
                 return .init(
@@ -163,7 +166,7 @@ struct WeatherApiController {
                         if let paramsHourly {
                             for variable in paramsHourly {
                                 let (v, previousDay) = variable.variableAndPreviousDay
-                                try reader.prefetchData(variable: v, time: time.hourlyRead.toSettings(previousDay: previousDay))
+                                try reader.prefetchData(variable: v, time: timeHourlyRead.toSettings(previousDay: previousDay))
                             }
                         }
                         if let paramsDaily {
@@ -183,12 +186,12 @@ struct WeatherApiController {
                     },
                     hourly: paramsHourly.map { variables in
                         return {
-                            return .init(name: "hourly", time: time.hourlyDisplay, columns: try variables.map { variable in
+                            return .init(name: "hourly", time: timeHourlyDisplay, columns: try variables.map { variable in
                                 let (v, previousDay) = variable.variableAndPreviousDay
-                                guard let d = try reader.get(variable: v, time: time.hourlyRead.toSettings(previousDay: previousDay))?.convertAndRound(params: params) else {
-                                    return .init(variable: variable.resultVariable, unit: .undefined, variables: [.float([Float](repeating: .nan, count: time.hourlyRead.count))])
+                                guard let d = try reader.get(variable: v, time: timeHourlyRead.toSettings(previousDay: previousDay))?.convertAndRound(params: params) else {
+                                    return .init(variable: variable.resultVariable, unit: .undefined, variables: [.float([Float](repeating: .nan, count: timeHourlyRead.count))])
                                 }
-                                assert(time.hourlyRead.count == d.data.count)
+                                assert(timeHourlyRead.count == d.data.count)
                                 return .init(variable: variable.resultVariable, unit: d.unit, variables: [.float(d.data)])
                             })
                         }
@@ -247,12 +250,14 @@ struct WeatherApiController {
 }
 
 extension ForecastVariable {
-    var resultVariable: ForecastapiResult<MultiDomains>.SurfaceAndPressureVariable {
+    var resultVariable: ForecastapiResult<MultiDomains>.SurfacePressureAndHeightVariable {
         switch self {
         case .pressure(let p):
             return .pressure(.init(p.variable, p.level))
         case .surface(let s):
             return .surface(s)
+        case .height(let h):
+            return .height(.init(h.variable, h.level))
         }
     }
 }
@@ -278,6 +283,7 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
     case gfs013
     case gfs_hrrr
     case gfs_graphcast025
+    case ncep_nbm_conus
     
     case meteofrance_seamless
     case meteofrance_mix
@@ -326,7 +332,11 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
     case era5
     case cerra
     case era5_land
+    case era5_ensemble
     case ecmwf_ifs
+    case ecmwf_ifs_analysis
+    case ecmwf_ifs_analysis_long_window
+    case ecmwf_ifs_long_window
     
     case arpae_cosmo_seamless
     case arpae_cosmo_2i
@@ -339,6 +349,11 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
     case knmi_seamless
     case dmi_seamless
     case metno_seamless
+    
+    case ukmo_seamless
+    case ukmo_global_deterministic_10km
+    case ukmo_uk_deterministic_2km
+    
 
     
     /// Return the required readers for this domain configuration
@@ -352,11 +367,11 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
             let gfsProbabilites = try ProbabilityReader.makeGfsReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
             let iconProbabilities = try ProbabilityReader.makeIconReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
             
-            guard let gfs: any GenericReaderProtocol = try GfsReader(domains: [.gfs025_ensemble, .gfs025, .gfs013], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) else {
+            guard let gfs: any GenericReaderProtocol = try GfsReader(domains: [.gfs025, .gfs013], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) else {
                 throw ModelError.domainInitFailed(domain: IconDomains.icon.rawValue)
             }
             // For Netherlands and Belgium use KNMI
-            if let knmiNetherlands = try KnmiReader(domain: KnmiDomain.harmonie_arome_netherlands, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
+            if (49.35..<53.79).contains(lat), (2.19..<7.66).contains(lon), let knmiNetherlands = try KnmiReader(domain: KnmiDomain.harmonie_arome_netherlands, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
                 let probabilities = try ProbabilityReader.makeEcmwfReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
                 let ecmwf = try EcmwfReader(domain: .ifs025, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
                 let iconEu = try IconReader(domain: .iconEu, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
@@ -381,7 +396,7 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
                 return [gfsProbabilites, iconProbabilities, gfs, icon, iconEu, iconD2, iconD2_15min]
             }
             // For western europe, use arome models
-            if let arome_france_hd = try MeteoFranceReader(domain: .arome_france_hd, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
+            if (42.10..<51.32).contains(lat), (-6.18..<8.35).contains(lon), let arome_france_hd = try MeteoFranceReader(domain: .arome_france_hd, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
                 let arome_france_hd_15min = try MeteoFranceReader(domain: .arome_france_hd_15min, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
                 let arome_france = try MeteoFranceReader(domain: .arome_france, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
                 let arome_france_15min = try MeteoFranceReader(domain: .arome_france_15min, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
@@ -389,7 +404,7 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
                 return Array([gfsProbabilites, iconProbabilities, gfs, icon, arpege_europe, arome_france, arome_france_hd, arome_france_15min, arome_france_hd_15min].compacted())
             }
             // For Northern Europe and Iceland use DMI Harmonie
-            if let dmiEurope = try DmiReader(domain: DmiDomain.harmonie_arome_europe, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options){
+            if (44..<66).contains(lat), let dmiEurope = try DmiReader(domain: DmiDomain.harmonie_arome_europe, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options){
                 let probabilities = try ProbabilityReader.makeEcmwfReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
                 let ecmwf = try EcmwfReader(domain: .ifs025, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
                 let iconEu = try IconReader(domain: .iconEu, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
@@ -397,10 +412,11 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
             }
             // For North America, use HRRR
             if let hrrr = try GfsReader(domains: [.hrrr_conus, .hrrr_conus_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
-                return [gfsProbabilites, icon, gfs, hrrr]
+                let nbmProbabilities = try ProbabilityReader.makeNbmReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
+                return Array([gfsProbabilites, nbmProbabilities, icon, gfs, hrrr].compacted())
             }
             // For Japan use JMA MSM with ICON. Does not use global JMA model because of poor resolution
-            if let jma_msm = try JmaReader(domain: .msm, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
+            if (22.4+5..<47.65-5).contains(lat), (120+5..<150-5).contains(lon), let jma_msm = try JmaReader(domain: .msm, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
                 return [gfsProbabilites, iconProbabilities, gfs, icon, jma_msm]
             }
             
@@ -411,39 +427,51 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
             
             // Northern africa
             if let arpege_europe = try MeteoFranceReader(domain: .arpege_europe, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options) {
-                return [gfsProbabilites, iconProbabilities, gfs, icon, arpege_europe]
+                let arpegeProbabilities: (any GenericReaderProtocol)? = try ProbabilityReader.makeMeteoFranceEuropeReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
+                return [gfsProbabilites, iconProbabilities, arpegeProbabilities, gfs, icon, arpege_europe].compactMap({$0})
             }
             
             // Remaining parts of the world
             return [gfsProbabilites, iconProbabilities, gfs, icon]
         case .gfs_mix, .gfs_seamless:
-            let gfsProbabilites = try ProbabilityReader.makeGfsReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
-            return [gfsProbabilites] + (try GfsReader(domains: [.gfs025, .gfs013, .hrrr_conus, .hrrr_conus_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? [])
+            return [
+                try ProbabilityReader.makeGfsReader(lat: lat, lon: lon, elevation: elevation, mode: mode) as any GenericReaderProtocol,
+                try ProbabilityReader.makeNbmReader(lat: lat, lon: lon, elevation: elevation, mode: mode) as (any GenericReaderProtocol)?,
+                try GfsReader(domains: [.gfs025, .gfs013, .hrrr_conus, .hrrr_conus_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            ].compactMap({$0})
         case .gfs_global:
             let gfsProbabilites = try ProbabilityReader.makeGfsReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
-            return [gfsProbabilites] + (try GfsReader(domains: [.gfs025_ensemble, .gfs025, .gfs013], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? [])
+            return [gfsProbabilites] + (try GfsReader(domains: [.gfs025, .gfs013], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? [])
         case .gfs025:
             return try GfsReader(domains: [.gfs025], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .gfs013:
             return try GfsReader(domains: [.gfs013], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .gfs_hrrr:
-            return try GfsReader(domains: [.hrrr_conus, .hrrr_conus_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
+            return [
+                try ProbabilityReader.makeNbmReader(lat: lat, lon: lon, elevation: elevation, mode: mode) as (any GenericReaderProtocol)?,
+                try GfsReader(domains: [.hrrr_conus, .hrrr_conus_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            ].compactMap({$0})
         case .gfs_graphcast025:
             return try GfsGraphCastReader(domain: .graphcast025, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .meteofrance_mix, .meteofrance_seamless:
-            return try MeteoFranceMixer(domains: [.arpege_world, .arpege_europe, .arome_france, .arome_france_hd, .arome_france_15min, .arome_france_hd_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
+            let arpegeProbabilities: (any GenericReaderProtocol)? = try ProbabilityReader.makeMeteoFranceEuropeReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
+            return ([arpegeProbabilities] + (try MeteoFranceMixer(domains: [.arpege_world, .arpege_europe, .arome_france, .arome_france_hd, .arome_france_15min, .arome_france_hd_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? [])).compactMap({$0})
         case .meteofrance_arpege_seamless, .arpege_seamless:
-            return try MeteoFranceMixer(domains: [.arpege_world, .arpege_europe], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
+            let arpegeProbabilities: (any GenericReaderProtocol)? = try ProbabilityReader.makeMeteoFranceEuropeReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
+            return ([arpegeProbabilities] + (try MeteoFranceMixer(domains: [.arpege_world, .arpege_europe], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? [])).compactMap({$0})
         case .meteofrance_arome_seamless, .arome_seamless:
             return try MeteoFranceMixer(domains: [.arome_france, .arome_france_hd, .arome_france_15min, .arome_france_hd_15min], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
         case .meteofrance_arpege_world, .arpege_world:
             return try MeteoFranceReader(domain: .arpege_world, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         case .meteofrance_arpege_europe, .arpege_europe:
-            return try MeteoFranceReader(domain: .arpege_europe, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
+            let arpegeProbabilities: (any GenericReaderProtocol)? = try ProbabilityReader.makeMeteoFranceEuropeReader(lat: lat, lon: lon, elevation: elevation, mode: mode)
+            return ([arpegeProbabilities] + (try MeteoFranceReader(domain: .arpege_europe, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? [])).compactMap({$0})
         case .meteofrance_arome_france, .arome_france:
-            return try MeteoFranceReader(domain: .arome_france, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
+            // Note: AROME PI 15min is not used for consistency here
+            return try MeteoFranceMixer(domains: [.arome_france], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
         case .meteofrance_arome_france_hd, .arome_france_hd:
-            return try MeteoFranceReader(domain: .arome_france_hd, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
+            // Note: AROME PI 15min is not used for consistency here
+            return try MeteoFranceMixer(domains: [.arome_france_hd], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
         case .jma_mix, .jma_seamless:
             return try JmaMixer(domains: [.gsm, .msm], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)?.reader ?? []
         case .jma_msm:
@@ -486,7 +514,8 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
         case .era5_seamless:
             return [try Era5Factory.makeEra5CombinedLand(lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
         case .era5:
-            return [try Era5Factory.makeReader(domain: .era5, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
+            // If explicitly selected ERA5, combine with ensemble to read spread variables
+            return [try Era5Factory.makeEra5WithEnsemble(lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
         case .era5_land:
             return [try Era5Factory.makeReader(domain: .era5_land, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
         case .cerra:
@@ -528,6 +557,26 @@ enum MultiDomains: String, RawRepresentableString, CaseIterable, MultiDomainMixe
             let metno: (any GenericReaderProtocol)? = try MetNoReader(domain: .nordic_pp, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
             let ecmwf = try EcmwfReader(domain: .ifs025, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
             return [probabilities, ecmwf, metno].compactMap({$0})
+        case .ecmwf_ifs_analysis_long_window:
+            return [try Era5Factory.makeReader(domain: .ecmwf_ifs_analysis_long_window, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
+        case .ecmwf_ifs_analysis:
+            return [try Era5Factory.makeReader(domain: .ecmwf_ifs_analysis, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
+        case .ecmwf_ifs_long_window:
+            return [try Era5Factory.makeReader(domain: .ecmwf_ifs_long_window, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
+        case .era5_ensemble:
+            return [try Era5Factory.makeReader(domain: .era5_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)]
+        case .ukmo_seamless:
+            let ukmoGlobal: (any GenericReaderProtocol)? = try UkmoReader(domain: UkmoDomain.global_deterministic_10km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            let ukmoUk = try UkmoReader(domain: UkmoDomain.uk_deterministic_2km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            return [ukmoGlobal, ukmoUk].compactMap({$0})
+        case .ukmo_global_deterministic_10km:
+            let ukmoGlobal: (any GenericReaderProtocol)? = try UkmoReader(domain: UkmoDomain.global_deterministic_10km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            return [ukmoGlobal].compactMap({$0})
+        case .ukmo_uk_deterministic_2km:
+            let ukmoUk = try UkmoReader(domain: UkmoDomain.uk_deterministic_2km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+            return [ukmoUk].compactMap({$0})
+        case .ncep_nbm_conus:
+            return try NbmReader(domains: [.nbm_conus], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({[$0]}) ?? []
         }
     }
     
@@ -690,6 +739,8 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
     case cloud_cover_2m
     case cloud_base
     case cloud_top
+    case convective_cloud_base
+    case convective_cloud_top
     case dewpoint_2m
     case dew_point_2m
     case diffuse_radiation
@@ -710,8 +761,10 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
     case convective_inhibition
     case leaf_wetness_probability
     case lightning_potential
+    case mass_density_8m
     case precipitation
     case precipitation_probability
+    case precipitation_type
     case pressure_msl
     case rain
     case relativehumidity_2m
@@ -724,7 +777,9 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
     case showers
     case skin_temperature
     case snow_depth
+    case snow_depth_water_equivalent
     case snow_height
+    case hail
     case snowfall
     case snowfall_water_equivalent
     case sunshine_duration
@@ -779,6 +834,8 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
     case temperature_50m
     case temperature_40m
     case temperature_80m
+    case temperature_2m_max
+    case temperature_2m_min
     case terrestrial_radiation
     case terrestrial_radiation_instant
     case total_column_integrated_water_vapour
@@ -857,6 +914,41 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
     case shortwave_radiation_clear_sky
     case global_tilted_irradiance
     case global_tilted_irradiance_instant
+    case boundary_layer_height
+    case thunderstorm_probability
+    case rain_probability
+    case freezing_rain_probability
+    case ice_pellets_probability
+    case snowfall_probability
+    case albedo
+    
+    
+    case wind_speed_10m_spread
+    case wind_speed_100m_spread
+    case wind_direction_10m_spread
+    case wind_direction_100m_spread
+    case snowfall_spread
+    case temperature_2m_spread
+    case wind_gusts_10m_spread
+    case dew_point_2m_spread
+    case cloud_cover_low_spread
+    case cloud_cover_mid_spread
+    case cloud_cover_high_spread
+    case pressure_msl_spread
+    case snowfall_water_equivalent_spread
+    case snow_depth_spread
+    case soil_temperature_0_to_7cm_spread
+    case soil_temperature_7_to_28cm_spread
+    case soil_temperature_28_to_100cm_spread
+    case soil_temperature_100_to_255cm_spread
+    case soil_moisture_0_to_7cm_spread
+    case soil_moisture_7_to_28cm_spread
+    case soil_moisture_28_to_100cm_spread
+    case soil_moisture_100_to_255cm_spread
+    case shortwave_radiation_spread
+    case precipitation_spread
+    case direct_radiation_spread
+    case boundary_layer_height_spread
     
     /// Some variables are kept for backwards compatibility
     var remapped: Self {
@@ -864,9 +956,9 @@ enum ForecastSurfaceVariable: String, GenericVariableMixable {
         case .temperature:
             return .temperature_2m
         case .windspeed:
-            return .windspeed_10m
+            return .wind_speed_10m
         case .winddirection:
-            return .winddirection_10m
+            return .wind_direction_10m
         case .surface_air_pressure:
             return .surface_pressure
         default:
@@ -928,7 +1020,36 @@ struct ForecastPressureVariable: PressureVariableRespresentable, GenericVariable
     }
 }
 
-typealias ForecastVariable = SurfaceAndPressureVariable<VariableAndPreviousDay, ForecastPressureVariable>
+/// Available pressure level variables
+enum ForecastHeightVariableType: String, GenericVariableMixable {
+    case temperature
+    case relativehumidity
+    case relative_humidity
+    case windspeed
+    case wind_speed
+    case winddirection
+    case wind_direction
+    case dewpoint
+    case dew_point
+    case cloudcover
+    case cloud_cover
+    case vertical_velocity
+    
+    var requiresOffsetCorrectionForMixing: Bool {
+        return false
+    }
+}
+
+struct ForecastHeightVariable: HeightVariableRespresentable, GenericVariableMixable {
+    let variable: ForecastHeightVariableType
+    let level: Int
+    
+    var requiresOffsetCorrectionForMixing: Bool {
+        return false
+    }
+}
+
+typealias ForecastVariable = SurfacePressureAndHeightVariable<VariableAndPreviousDay, ForecastPressureVariable, ForecastHeightVariable>
 
 extension ForecastVariable {
     var variableAndPreviousDay: (ForecastVariable, Int) {
@@ -937,6 +1058,8 @@ extension ForecastVariable {
             return (ForecastVariable.surface(.init(surface.variable.remapped, 0)), surface.previousDay)
         case .pressure(let pressure):
             return (ForecastVariable.pressure(pressure), 0)
+        case .height(let height):
+            return (ForecastVariable.height(height), 0)
         }
     }
 }
@@ -1061,19 +1184,19 @@ enum ForecastVariableDaily: String, DailyVariableCalculatable, RawRepresentableS
         case .shortwave_radiation_sum:
             return .radiationSum(.surface(.init(.shortwave_radiation, 0)))
         case .windspeed_10m_max, .wind_speed_10m_max:
-            return .max(.surface(.init(.windspeed_10m, 0)))
+            return .max(.surface(.init(.wind_speed_10m, 0)))
         case .windspeed_10m_min, .wind_speed_10m_min:
-            return .min(.surface(.init(.windspeed_10m, 0)))
+            return .min(.surface(.init(.wind_speed_10m, 0)))
         case .windspeed_10m_mean, .wind_speed_10m_mean:
-            return .mean(.surface(.init(.windspeed_10m, 0)))
+            return .mean(.surface(.init(.wind_speed_10m, 0)))
         case .windgusts_10m_max, .wind_gusts_10m_max:
-            return .max(.surface(.init(.windgusts_10m, 0)))
+            return .max(.surface(.init(.wind_gusts_10m, 0)))
         case .windgusts_10m_min, .wind_gusts_10m_min:
-            return .min(.surface(.init(.windgusts_10m, 0)))
+            return .min(.surface(.init(.wind_gusts_10m, 0)))
         case .windgusts_10m_mean, .wind_gusts_10m_mean:
-            return .mean(.surface(.init(.windgusts_10m, 0)))
+            return .mean(.surface(.init(.wind_gusts_10m, 0)))
         case .winddirection_10m_dominant, .wind_direction_10m_dominant:
-            return .dominantDirection(velocity: .surface(.init(.windspeed_10m, 0)), direction: .surface(.init(.winddirection_10m, 0)))
+            return .dominantDirection(velocity: .surface(.init(.wind_speed_10m, 0)), direction: .surface(.init(.wind_direction_10m, 0)))
         case .precipitation_hours:
             return .precipitationHours(.surface(.init(.precipitation, 0)))
         case .sunrise:

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 import Vapor
 import SwiftNetCDF
 
@@ -60,15 +60,7 @@ struct DownloadBomCommand: AsyncCommand {
             try await downloadEnsemble(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, skipFilesIfExisting: signature.skipExisting) : signature.upperLevel ?
             try await downloadModelLevel(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, skipFilesIfExisting: signature.skipExisting) :
             try await download(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, skipFilesIfExisting: signature.skipExisting)
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.rawValue })
-            try domain.domainRegistry.syncToS3(
-                bucket: uploadS3Bucket,
-                variables: signature.uploadS3OnlyProbabilities ? [ProbabilityVariable.precipitation_probability] : variables
-            )
-        }
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: signature.uploadS3OnlyProbabilities)
     }
     
     func downloadElevation(application: Application, domain: BomDomain, server: String, run: Timestamp) async throws {
@@ -120,7 +112,7 @@ struct DownloadBomCommand: AsyncCommand {
         }
         
         elevation.shift180LongitudeAndFlipLatitude(nt: 1, ny: domain.grid.ny, nx: domain.grid.nx)
-        try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: surfaceElevationFileOm, compressionType: .p4nzdec256, scalefactor: 1, all: elevation)
+        try OmFileWriter(dim0: domain.grid.ny, dim1: domain.grid.nx, chunk0: 20, chunk1: 20).write(file: surfaceElevationFileOm, compressionType: .pfor_delta2d_int16, scalefactor: 1, all: elevation)
     }
     
     /// Download model level wind on 40, 80 and 120 m. Model level have 1h delay
@@ -129,7 +121,6 @@ struct DownloadBomCommand: AsyncCommand {
         let deadLineHours: Double = 5
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, waitAfterLastModifiedBeforeDownload: TimeInterval(60*5))
         Process.alarm(seconds: Int(deadLineHours + 1) * 3600)
-        let nLocationsPerChunk = OmFileSplitter(domain).nLocationsPerChunk
         let variables = ["wnd_ucmp", "wnd_vcmp"]
     
         // Download u/v wind
@@ -163,7 +154,7 @@ struct DownloadBomCommand: AsyncCommand {
         ]
         let handles = try await map.mapConcurrent(nConcurrent: concurrent) { map -> [GenericVariableHandle] in
             logger.info("Calculate wind level \(map.level)")
-            let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+            let writer = OmFileSplitter.makeSpatialWriter(domain: domain)
             return try zip(
                 try combineAnalysisForecast(domain: domain, variable: "wnd_ucmp", run: run, level: map.level),
                 try combineAnalysisForecast(domain: domain, variable: "wnd_vcmp", run: run, level: map.level)
@@ -174,8 +165,8 @@ struct DownloadBomCommand: AsyncCommand {
                 let fnSpeed = try writer.write(domain: domain, variable: map.speed, data: speed)
                 let fnDirection = try writer.write(domain: domain, variable: map.direction, data: direction)
                 return [
-                    GenericVariableHandle(variable: map.speed, time: timestamp, member: 0, fn: fnSpeed, skipHour0: false),
-                    GenericVariableHandle(variable: map.direction, time: timestamp, member: 0, fn: fnDirection, skipHour0: false)
+                    GenericVariableHandle(variable: map.speed, time: timestamp, member: 0, fn: fnSpeed),
+                    GenericVariableHandle(variable: map.direction, time: timestamp, member: 0, fn: fnDirection)
                     ]
             }
         }.flatMap({$0})
@@ -191,8 +182,6 @@ struct DownloadBomCommand: AsyncCommand {
         let deadLineHours: Double = 5
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, waitAfterLastModifiedBeforeDownload: TimeInterval(60*5))
         Process.alarm(seconds: Int(deadLineHours + 1) * 3600)
-        let nMembers = domain.ensembleMembers
-        let nLocationsPerChunk = OmFileSplitter(domain, nMembers: nMembers, chunknLocations: nMembers > 1 ? nMembers : nil).nLocationsPerChunk
         
         // list of variables to download
         // http://www.bom.gov.au/nwp/doc/access/docs/ACCESS-G.all-flds.slv.surface.shtml
@@ -245,11 +234,11 @@ struct DownloadBomCommand: AsyncCommand {
                 guard let omVariable = variable.om else {
                     return []
                 }
-                let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 logger.info("Compressing and writing data to member_\(member) \(omVariable.omFileName.file).om")
                 return try self.iterateForecast(domain: domain, member: member, variable: variable.name, run: run).map { (timestamp, data) in
                     let fn = try writer.write(domain: domain, variable: omVariable, data: data)
-                    return GenericVariableHandle(variable: omVariable, time: timestamp, member: member, fn: fn, skipHour0: false)
+                    return GenericVariableHandle(variable: omVariable, time: timestamp, member: member, fn: fn)
                 }
             }
             if domain == .access_global_ensemble && variable.om == .precipitation {
@@ -280,14 +269,14 @@ struct DownloadBomCommand: AsyncCommand {
             ).mapConcurrent(nConcurrent: concurrent) { arg -> [GenericVariableHandle] in
                 let (((conv_snow, ls_snow),(ttl_cld,precipitation)),((conv_rain,wndgust10m),visibility)) = arg
                 let timestamp = conv_snow.0
-                let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 let snow = zip(conv_snow.1, ls_snow.1).map(+)
                 let weather_code = WeatherCode.calculate(cloudcover: ttl_cld.1.map{$0*100}, precipitation: precipitation.1, convectivePrecipitation: conv_rain.1, snowfallCentimeters: snow.map{$0*0.7}, gusts: wndgust10m.1, cape: nil, liftedIndex: nil, visibilityMeters: visibility.1, categoricalFreezingRain: nil, modelDtSeconds: domain.dtSeconds)
                 let fnSnow = try writer.write(domain: domain, variable: .snowfall_water_equivalent, data: snow)
                 let fnWeatherCode = try writer.write(domain: domain, variable: .weather_code, data: weather_code)
                 return [
-                    GenericVariableHandle(variable: BomVariable.snowfall_water_equivalent, time: timestamp, member: member, fn: fnSnow, skipHour0: false),
-                    GenericVariableHandle(variable: BomVariable.weather_code, time: timestamp, member: member, fn: fnWeatherCode, skipHour0: false)
+                    GenericVariableHandle(variable: BomVariable.snowfall_water_equivalent, time: timestamp, member: member, fn: fnSnow),
+                    GenericVariableHandle(variable: BomVariable.weather_code, time: timestamp, member: member, fn: fnWeatherCode)
                 ]
             }.flatMap({$0})
         }
@@ -300,10 +289,10 @@ struct DownloadBomCommand: AsyncCommand {
             ).mapConcurrent(nConcurrent: concurrent) { arg -> GenericVariableHandle in
                 let (sfc_temp, dewpt_scrn) = arg
                 let timestamp = sfc_temp.0
-                let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 let rh = zip(sfc_temp.1, dewpt_scrn.1).map({Meteorology.relativeHumidity(temperature: $0.0-273.15, dewpoint: $0.1-273.15)})
                 let fnRh = try writer.write(domain: domain, variable: .relative_humidity_2m, data: rh)
-                return GenericVariableHandle(variable: BomVariable.relative_humidity_2m, time: timestamp, member: member, fn: fnRh, skipHour0: false)
+                return GenericVariableHandle(variable: BomVariable.relative_humidity_2m, time: timestamp, member: member, fn: fnRh)
             }
         }
         
@@ -316,12 +305,12 @@ struct DownloadBomCommand: AsyncCommand {
                 let timestamp = u.0
                 let speed = zip(u.1, v.1).map(Meteorology.windspeed)
                 let direction = Meteorology.windirectionFast(u: u.1, v: v.1)
-                let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 let fnSpeed = try writer.write(domain: domain, variable: .wind_speed_10m, data: speed)
                 let fnDirection = try writer.write(domain: domain, variable: .wind_direction_10m, data: direction)
                 return [
-                    GenericVariableHandle(variable: BomVariable.wind_speed_10m, time: timestamp, member: member, fn: fnSpeed, skipHour0: false),
-                    GenericVariableHandle(variable: BomVariable.wind_direction_10m, time: timestamp, member: member, fn: fnDirection, skipHour0: false)
+                    GenericVariableHandle(variable: BomVariable.wind_speed_10m, time: timestamp, member: member, fn: fnSpeed),
+                    GenericVariableHandle(variable: BomVariable.wind_direction_10m, time: timestamp, member: member, fn: fnDirection)
                 ]
             }.flatMap({$0})
         }
@@ -336,7 +325,6 @@ struct DownloadBomCommand: AsyncCommand {
         let deadLineHours: Double = 5
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, waitAfterLastModifiedBeforeDownload: TimeInterval(60*5))
         Process.alarm(seconds: Int(deadLineHours + 1) * 3600)
-        let nLocationsPerChunk = OmFileSplitter(domain).nLocationsPerChunk
         
         // list of variables to download
         // http://www.bom.gov.au/nwp/doc/access/docs/ACCESS-G.all-flds.slv.surface.shtml
@@ -394,11 +382,11 @@ struct DownloadBomCommand: AsyncCommand {
             guard let omVariable = variable.om else {
                 return []
             }
-            let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+            let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
             logger.info("Compressing and writing data to \(omVariable.omFileName.file).om")
             return try self.combineAnalysisForecast(domain: domain, variable: variable.name, run: run).map { (timestamp, data) in
                 let fn = try writer.write(domain: domain, variable: omVariable, data: data)
-                return GenericVariableHandle(variable: omVariable, time: timestamp, member: 0, fn: fn, skipHour0: false)
+                return GenericVariableHandle(variable: omVariable, time: timestamp, member: 0, fn: fn)
             }
         }
         
@@ -420,14 +408,14 @@ struct DownloadBomCommand: AsyncCommand {
         ).mapConcurrent(nConcurrent: concurrent) { arg -> [GenericVariableHandle] in
             let (((conv_snow, ls_snow),(ttl_cld,precipitation)),((conv_rain,wndgust10m),(cld_phys_thunder_p,visibility))) = arg
             let timestamp = conv_snow.0
-            let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+            let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
             let snow = zip(conv_snow.1, ls_snow.1).map(+)
             let weather_code = WeatherCode.calculate(cloudcover: ttl_cld.1.map{$0*100}, precipitation: precipitation.1, convectivePrecipitation: conv_rain.1, snowfallCentimeters: snow.map{$0*0.7}, gusts: wndgust10m.1, cape: cld_phys_thunder_p.1.map({$0*3}), liftedIndex: nil, visibilityMeters: visibility.1, categoricalFreezingRain: nil, modelDtSeconds: domain.dtSeconds)
             let fnSnow = try writer.write(domain: domain, variable: .snowfall_water_equivalent, data: snow)
             let fnWeatherCode = try writer.write(domain: domain, variable: .weather_code, data: weather_code)
             return [
-                GenericVariableHandle(variable: BomVariable.snowfall_water_equivalent, time: timestamp, member: 0, fn: fnSnow, skipHour0: false),
-                GenericVariableHandle(variable: BomVariable.weather_code, time: timestamp, member: 0, fn: fnWeatherCode, skipHour0: false)
+                GenericVariableHandle(variable: BomVariable.snowfall_water_equivalent, time: timestamp, member: 0, fn: fnSnow),
+                GenericVariableHandle(variable: BomVariable.weather_code, time: timestamp, member: 0, fn: fnWeatherCode)
             ]
         }
         
@@ -439,12 +427,12 @@ struct DownloadBomCommand: AsyncCommand {
             let timestamp = u.0
             let speed = zip(u.1, v.1).map(Meteorology.windspeed)
             let direction = Meteorology.windirectionFast(u: u.1, v: v.1)
-            let writer = OmFileWriter(dim0: 1, dim1: domain.grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+            let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
             let fnSpeed = try writer.write(domain: domain, variable: .wind_speed_10m, data: speed)
             let fnDirection = try writer.write(domain: domain, variable: .wind_direction_10m, data: direction)
             return [
-                GenericVariableHandle(variable: BomVariable.wind_speed_10m, time: timestamp, member: 0, fn: fnSpeed, skipHour0: false),
-                GenericVariableHandle(variable: BomVariable.wind_direction_10m, time: timestamp, member: 0, fn: fnDirection, skipHour0: false)
+                GenericVariableHandle(variable: BomVariable.wind_speed_10m, time: timestamp, member: 0, fn: fnSpeed),
+                GenericVariableHandle(variable: BomVariable.wind_direction_10m, time: timestamp, member: 0, fn: fnDirection)
                 ]
         }
         await curl.printStatistics()
@@ -632,21 +620,7 @@ extension OmFileWriter {
         if let fma = variable.multiplyAdd {
             data.multiplyAdd(multiply: fma.multiply, add: fma.add)
         }
-        let fn = try writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: data)
-        return fn
-    }
-    
-    
-    /// Write all data at once without any streaming
-    /// Creates a temporary file and returns only a file handle
-    public func writeTemporary(compressionType: CompressionType, scalefactor: Float, all: [Float]) throws -> FileHandle {
-        let file = "\(OpenMeteo.tempDirectory)/\(Int.random(in: 0..<Int.max)).om"
-        try FileManager.default.removeItemIfExists(at: file)
-        let fn = try FileHandle.createNewFile(file: file, exclusive: true)
-        try FileManager.default.removeItem(atPath: file)
-        try write(fn: fn, compressionType: compressionType, scalefactor: scalefactor, fsync: false, supplyChunk: { range in
-            return ArraySlice(all)
-        })
+        let fn = try writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: data)
         return fn
     }
 }

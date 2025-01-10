@@ -47,7 +47,7 @@ struct CamsController {
         try await req.ensureApiKey("air-quality-api", apikey: params.apikey)
         
         let currentTime = Timestamp.now()
-        let allowedRange = Timestamp(2022, 7, 29) ..< currentTime.add(86400 * 6)
+        let allowedRange = Timestamp(2013, 1, 1) ..< currentTime.add(86400 * 6)
         
         let paramsHourly = try VariableOrDerived<CamsVariable, CamsVariableDerived>.load(commaSeparatedOptional: params.hourly)
         let paramsCurrent = try VariableOrDerived<CamsVariable, CamsVariableDerived>.load(commaSeparatedOptional: params.current)
@@ -67,19 +67,22 @@ struct CamsController {
                 guard let reader = try readerAndDomain.reader() else {
                     return nil
                 }
+                let hourlyDt = (params.temporal_resolution ?? .hourly).dtSeconds ?? reader.modelDtSeconds
+                let timeHourlyRead = time.hourlyRead.with(dtSeconds: hourlyDt)
+                let timeHourlyDisplay = time.hourlyDisplay.with(dtSeconds: hourlyDt)
                 let domain = readerAndDomain.domain
                 
-                let hourlyFn: (() throws -> ApiSection<ForecastapiResult<CamsQuery.Domain>.SurfaceAndPressureVariable>)? = paramsHourly.map { variables in
+                let hourlyFn: (() throws -> ApiSection<ForecastapiResult<CamsQuery.Domain>.SurfacePressureAndHeightVariable>)? = paramsHourly.map { variables in
                     return {
-                        return .init(name: "hourly", time: time.hourlyDisplay, columns: try variables.map { variable in
-                            let d = try reader.get(variable: variable, time: time.hourlyRead.toSettings()).convertAndRound(params: params)
-                            assert(time.hourlyRead.count == d.data.count)
+                        return .init(name: "hourly", time: timeHourlyDisplay, columns: try variables.map { variable in
+                            let d = try reader.get(variable: variable, time: timeHourlyRead.toSettings()).convertAndRound(params: params)
+                            assert(timeHourlyRead.count == d.data.count)
                             return .init(variable: .surface(variable), unit: d.unit, variables: [.float(d.data)])
                         })
                     }
                 }
                 
-                let currentFn: (() throws -> ApiSectionSingle<ForecastapiResult<CamsQuery.Domain>.SurfaceAndPressureVariable>)? = paramsCurrent.map { variables in
+                let currentFn: (() throws -> ApiSectionSingle<ForecastapiResult<CamsQuery.Domain>.SurfacePressureAndHeightVariable>)? = paramsCurrent.map { variables in
                     return {
                         return .init(name: "current", time: currentTimeRange.range.lowerBound, dtSeconds: currentTimeRange.dtSeconds, columns: try variables.map { variable in
                             let d = try reader.get(variable: variable, time: currentTimeRange.toSettings()).convertAndRound(params: params)
@@ -98,7 +101,7 @@ struct CamsController {
                             try reader.prefetchData(variables: paramsCurrent, time: currentTimeRange.toSettings())
                         }
                         if let paramsHourly {
-                            try reader.prefetchData(variables: paramsHourly, time: time.hourlyRead.toSettings())
+                            try reader.prefetchData(variables: paramsHourly, time: timeHourlyRead.toSettings())
                         }
                     },
                     current: currentFn,
@@ -344,11 +347,11 @@ extension CamsQuery {
         var camsDomains: [CamsDomain] {
             switch self {
             case .auto:
-                return [.cams_global, .cams_europe]
+                return [.cams_global, .cams_global_greenhouse_gases, .cams_europe, .cams_europe_reanalysis_interim, .cams_europe_reanalysis_validated, .cams_europe_reanalysis_validated_pre2020, .cams_europe_reanalysis_validated_pre2018]
             case .cams_global:
-                return [.cams_global]
+                return [.cams_global, .cams_global_greenhouse_gases]
             case .cams_europe:
-                return [.cams_europe]
+                return [.cams_europe, .cams_europe_reanalysis_interim, .cams_europe_reanalysis_validated, .cams_europe_reanalysis_validated_pre2020, .cams_europe_reanalysis_validated_pre2018]
             }
         }
     }

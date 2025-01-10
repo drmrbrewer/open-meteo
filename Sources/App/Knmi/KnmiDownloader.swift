@@ -1,6 +1,6 @@
 import Foundation
 import Vapor
-import SwiftPFor2D
+import OmFileFormat
 import SwiftEccodes
 
 struct KnmiDownload: AsyncCommand {
@@ -38,14 +38,9 @@ struct KnmiDownload: AsyncCommand {
                 
         let handles = try await download(application: context.application, domain: domain, run: run, concurrent: nConcurrent)
         
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent)
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
         //try convert(logger: logger, domain: domain, variables: variables, run: run, createNetcdf: signature.createNetcdf)
         logger.info("Finished in \(start.timeElapsedPretty())")
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.rawValue })
-            try domain.domainRegistry.syncToS3(bucket: uploadS3Bucket, variables: variables)
-        }
     }
 
     /// Temporarily keep those varibles to derive others
@@ -127,6 +122,7 @@ struct KnmiDownload: AsyncCommand {
      TODO:
      - model elevation and land/sea mask for European model configuration
      - support ensemble models
+     - Europe domain does not have total precipitation. Only rain, snow and graupel. Showers are entirely missing!!! NL nest has total precipitation
      
      Important: Wind U/V components are defined on a Rotated LatLon  projection. They need to be corrected for true north.
      */
@@ -140,8 +136,6 @@ struct KnmiDownload: AsyncCommand {
         defer { Process.alarm(seconds: 0) }
         
         let grid = domain.grid
-        let nMembers = domain.ensembleMembers
-        let nLocationsPerChunk = OmFileSplitter(domain, nMembers: nMembers, chunknLocations: nMembers > 1 ? nMembers : nil).nLocationsPerChunk
         
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, waitAfterLastModified: TimeInterval(2*60))
         
@@ -194,12 +188,18 @@ struct KnmiDownload: AsyncCommand {
                     logger.warning("could not get attributes")
                     return nil
                 }
-                /// NOTE: KNMI does not ssem to set this field. Only way to decode member number would be file name which is not accessible while streaming
+                /// NOTE: KNMI does not seem to set this field. Only way to decode member number would be file name which is not accessible while streaming
                 let member = message.getLong(attribute: "perturbationNumber") ?? 0
                 let timestamp = try Timestamp.from(yyyymmdd: "\(validityDate)\(Int(validityTime)!.zeroPadded(len: 4))")
                 
                 /// NL nest has 100,200,300 hPa levels.... not sure what the point is with those levels
                 if domain == .harmonie_arome_netherlands && typeOfLevel == "isobaricInhPa" {
+                    return nil
+                }
+                
+                if ["rain", "tsnowp"].contains(shortName) && stepType == "instant" {
+                    // Rain and snow snowfall are twice inside the GRIB file.
+                    // One instant and accumulation. Make sure to only use accumulation
                     return nil
                 }
                 
@@ -237,9 +237,9 @@ struct KnmiDownload: AsyncCommand {
                 if stepType == "accum" && timestamp == run {
                     return nil // skip precipitation at timestep 0
                 }
-                logger.info("Processing \(timestamp.format_YYYYMMddHH) \(variable) [\(unit)]")
+                logger.info("Processing \(timestamp.format_YYYYMMddHH) \(variable) [\(unit)] \(stepRange) \(stepType) '\(parameterName)' \(parameterUnits)")
                 
-                let writer = OmFileWriter(dim0: 1, dim1: grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+                let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
                 var grib2d = GribArray2D(nx: grid.nx, ny: grid.ny)
                 try grib2d.load(message: message)
                 
@@ -267,15 +267,15 @@ struct KnmiDownload: AsyncCommand {
                     return nil
                 }
                 
-                let fn = try writer.writeTemporary(compressionType: .p4nzdec256, scalefactor: variable.scalefactor, all: grib2d.array.data)
-                return GenericVariableHandle(variable: variable, time: timestamp, member: member, fn: fn, skipHour0: stepType == "accum" || stepType == "avg")
+                let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16, scalefactor: variable.scalefactor, all: grib2d.array.data)
+                return GenericVariableHandle(variable: variable, time: timestamp, member: member, fn: fn)
             }.collect().compactMap({$0})
             
             if generateElevationFile {
                 try await inMemory.generateElevationFile(elevation: .elevation, landmask: .landmask, domain: domain)
             }
             
-            let writer = OmFileWriter(dim0: 1, dim1: grid.count, chunk0: 1, chunk1: nLocationsPerChunk)
+            let writer = OmFileSplitter.makeSpatialWriter(domain: domain, nMembers: domain.ensembleMembers)
             let gustHandles = try await inMemory.calculateWindSpeed(u: .ugst, v: .vgst, outSpeedVariable: KnmiSurfaceVariable.wind_gusts_10m, outDirectionVariable: nil, writer: writer)
             
             let windHandles = [
@@ -388,6 +388,8 @@ struct KnmiDownload: AsyncCommand {
         switch (shortName, levelStr) {
         case ("rain", "0"):
             return KnmiSurfaceVariable.rain
+        case ("tp", "0"):
+            return KnmiSurfaceVariable.precipitation
         case ("snow", "0"):
             return KnmiSurfaceVariable.snowfall_water_equivalent
         case ("2t", "2"):

@@ -18,6 +18,7 @@ enum IconWaveDomainApi: String, CaseIterable, RawRepresentableString, MultiDomai
     case ecmwf_wam025
     case ecmwf_wam025_ensemble
     case ncep_gfswave025
+    case ncep_gfswave016
     case ncep_gefswave025
     case meteofrance_wave
     case meteofrance_currents
@@ -41,10 +42,17 @@ enum IconWaveDomainApi: String, CaseIterable, RawRepresentableString, MultiDomai
             let mfcurrents = try GenericReader<MfWaveDomain, MfCurrentReader.Variable>(domain: .mfcurrents, lat: lat, lon: lon, elevation: elevation, mode: mode).map { reader -> any GenericReaderProtocol in
                 MfCurrentReader(reader: GenericReaderCached<MfWaveDomain, MfCurrentReader.Variable>(reader: reader))
             }
-            let mfwave = try GenericReader<MfWaveDomain, MfWaveVariable>(domain: .mfwave, lat: lat, lon: lon, elevation: elevation, mode: mode).map { reader -> any GenericReaderProtocol in
-                MfWaveReader(reader: reader)
+            let waveModel: (any GenericReaderProtocol)?;
+            if let update = try MfWaveDomain.mfwave.getMetaJson()?.lastRunAvailabilityTime, update <= Timestamp.now().subtract(hours: 26) {
+                // mf model outdated, use ECMWF
+                waveModel = try GenericReader<EcmwfDomain, EcmwfWaveVariable>(domain: EcmwfDomain.wam025, lat: lat, lon: lon, elevation: elevation, mode: mode)
+            } else {
+                // use mf wave
+                waveModel = try GenericReader<MfWaveDomain, MfWaveVariable>(domain: .mfwave, lat: lat, lon: lon, elevation: elevation, mode: mode).map { reader -> any GenericReaderProtocol in
+                    MfWaveReader(reader: reader)
+                }
             }
-            let readers: [(any GenericReaderProtocol)?] = [mfwave, mfcurrents, ewam, gwam]
+            let readers: [(any GenericReaderProtocol)?] = [waveModel, mfcurrents, ewam, gwam]
             return readers.compactMap({$0})
             /*
             let ecmwfWam025 = try GenericReader<EcmwfDomain, EcmwfWaveVariable>(domain: EcmwfDomain.wam025, lat: lat, lon: lon, elevation: elevation, mode: mode)
@@ -70,6 +78,8 @@ enum IconWaveDomainApi: String, CaseIterable, RawRepresentableString, MultiDomai
             return try GenericReader<GfsDomain, GfsWaveVariable>(domain: .gfswave025, lat: lat, lon: lon, elevation: elevation, mode: mode).flatMap({[$0]}) ?? []
         case .ncep_gefswave025:
             return try GenericReader<GfsDomain, GfsWaveVariable>(domain: .gfswave025_ens, lat: lat, lon: lon, elevation: elevation, mode: mode).flatMap({[$0]}) ?? []
+        case .ncep_gfswave016:
+            return try GenericReader<GfsDomain, GfsWaveVariable>(domain: .gfswave016, lat: lat, lon: lon, elevation: elevation, mode: mode).flatMap({[$0]}) ?? []
         }
     }
 }
@@ -78,6 +88,7 @@ enum MarineVariable: String, GenericVariableMixable {
     case wave_height
     case wave_period
     case wave_direction
+    case wave_peak_period
     case wind_wave_height
     case wind_wave_period
     case wind_wave_peak_period
@@ -124,6 +135,9 @@ struct IconWaveController {
                 guard let reader = try GenericReaderMulti<MarineVariable, IconWaveDomainApi>(domain: domain, lat: coordinates.latitude, lon: coordinates.longitude, elevation: .nan, mode: params.cell_selection ?? .sea, options: params.readerOptions) else {
                     return nil
                 }
+                let hourlyDt = (params.temporal_resolution ?? .hourly).dtSeconds ?? reader.modelDtSeconds
+                let timeHourlyRead = time.hourlyRead.with(dtSeconds: hourlyDt)
+                let timeHourlyDisplay = time.hourlyDisplay.with(dtSeconds: hourlyDt)
                 
                 return .init(
                     model: domain,
@@ -133,7 +147,7 @@ struct IconWaveController {
                     prefetch: {
                         if let paramsHourly {
                             for member in 0..<reader.domain.countEnsembleMember {
-                                try reader.prefetchData(variables: paramsHourly, time: time.hourlyRead.toSettings(ensembleMember: member))
+                                try reader.prefetchData(variables: paramsHourly, time: timeHourlyRead.toSettings(ensembleMember: member))
                             }
                         }
                         if let paramsCurrent {
@@ -157,18 +171,18 @@ struct IconWaveController {
                     },
                     hourly: paramsHourly.map { variables in
                         return {
-                            return .init(name: "hourly", time: time.hourlyDisplay, columns: try variables.map { variable in
+                            return .init(name: "hourly", time: timeHourlyDisplay, columns: try variables.map { variable in
                                 var unit: SiUnit? = nil
                                 let allMembers: [ApiArray] = try (0..<reader.domain.countEnsembleMember).compactMap { member in
-                                    guard let d = try reader.get(variable: variable, time: time.hourlyRead.toSettings(ensembleMemberLevel: member))?.convertAndRound(params: params) else {
+                                    guard let d = try reader.get(variable: variable, time: timeHourlyRead.toSettings(ensembleMemberLevel: member))?.convertAndRound(params: params) else {
                                         return nil
                                     }
                                     unit = d.unit
-                                    assert(time.hourlyRead.count == d.data.count)
+                                    assert(timeHourlyRead.count == d.data.count)
                                     return ApiArray.float(d.data)
                                 }
                                 guard allMembers.count > 0 else {
-                                    return ApiColumn(variable: .surface(variable), unit: .undefined, variables: .init(repeating: ApiArray.float([Float](repeating: .nan, count: time.hourlyRead.count)), count: reader.domain.countEnsembleMember))
+                                    return ApiColumn(variable: .surface(variable), unit: .undefined, variables: .init(repeating: ApiArray.float([Float](repeating: .nan, count: timeHourlyRead.count)), count: reader.domain.countEnsembleMember))
                                 }
                                 return .init(variable: .surface(variable), unit: unit ?? .undefined, variables: allMembers)
                             })

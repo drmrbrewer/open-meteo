@@ -1,5 +1,5 @@
 import Foundation
-import SwiftPFor2D
+import OmFileFormat
 
 
 enum EcmwfDomain: String, GenericDomain {
@@ -18,9 +18,10 @@ enum EcmwfDomain: String, GenericDomain {
         if self == .aifs025 {
             return Array(stride(from: 0, through: 360, by: dtHours))
         }
+        let fullLength = isEnsemble || self == .ifs025 || self == .wam025
         switch run {
-        case 0,12: return Array(stride(from: 0, through: 144, by: dtHours)) + Array(stride(from: 150, through: isEnsemble ? 360 : 240, by: 6))
-        case 6,18: return Array(stride(from: 0, through: isEnsemble ? 144 : 90, by: dtHours))
+        case 0,12: return Array(stride(from: 0, through: 144, by: dtHours)) + Array(stride(from: 150, through: fullLength ? 360 : 240, by: 6))
+        case 6,18: return Array(stride(from: 0, through: fullLength ? 144 : 90, by: dtHours))
         default: fatalError("Invalid run")
         }
     }
@@ -80,6 +81,19 @@ enum EcmwfDomain: String, GenericDomain {
             return 3*3600
         }
         
+    }
+    
+    var updateIntervalSeconds: Int {
+        switch self {
+        case .ifs04, .ifs04_ensemble:
+            return 6*3600
+        case .ifs025, .ifs025_ensemble:
+            return 6*3600
+        case .wam025, .wam025_ensemble:
+            return 6*3600
+        case .aifs025:
+            return 6*3600
+        }
     }
     
     var grid: Gridable {

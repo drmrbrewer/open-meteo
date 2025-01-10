@@ -1,7 +1,7 @@
 import Foundation
 import Vapor
 import SwiftEccodes
-import SwiftPFor2D
+import OmFileFormat
 
 
 typealias CerraHourlyVariable = VariableOrDerived<CerraVariable, CerraVariableDerived>
@@ -277,8 +277,8 @@ struct CerraReader: GenericReaderDerivedSimple, GenericReaderProtocol {
             let factor = Zensun.backwardsAveragedToInstantFactor(time: time.time, latitude: reader.modelLat, longitude: reader.modelLon)
             return DataAndUnit(zip(sw.data, factor).map(*), sw.unit)
         case .direct_normal_irradiance_instant:
-            let direct = try get(derived: .direct_radiation_instant, time: time)
-            let dni = Zensun.calculateInstantDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
+            let direct = try get(raw: .direct_radiation, time: time)
+            let dni = Zensun.calculateBackwardsDNI(directRadiation: direct.data, latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time, convertToInstant: true)
             return DataAndUnit(dni, direct.unit)
         case .direct_radiation_instant:
             let direct = try get(raw: .direct_radiation, time: time)
@@ -360,6 +360,9 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
     case shortwave_radiation
     case precipitation
     case direct_radiation
+    case albedo
+    case snow_depth
+    case snow_depth_water_equivalent
     
     var storePreviousForecast: Bool {
         return false
@@ -380,11 +383,11 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .wind_speed_10m:
             return .hermite(bounds: nil)
         case .wind_direction_10m:
-            return .backwards
+            return .linearDegrees
         case .wind_speed_100m:
             return .hermite(bounds: nil)
         case .wind_direction_100m:
-            return .backwards
+            return .linearDegrees
         case .wind_gusts_10m:
             return .hermite(bounds: nil)
         case .relative_humidity_2m:
@@ -405,6 +408,10 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
             return .backwards_sum
         case .direct_radiation:
             return .solar_backwards_averaged
+        case .albedo:
+            return .linear
+        case .snow_depth, .snow_depth_water_equivalent:
+            return .linear
         }
     }
     
@@ -430,6 +437,9 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .wind_direction_10m: return "10m_wind_direction"
         case .wind_speed_100m: return "wind_speed"
         case .wind_direction_100m: return "wind_direction"
+        case .albedo: return "albedo"
+        case .snow_depth: return "snow_depth"
+        case .snow_depth_water_equivalent: return "snow_depth_water_equivalent"
         }
     }
     
@@ -462,6 +472,8 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .temperature_2m: return (-273.15, 1) // kelvin to celsius
         case .shortwave_radiation: fallthrough // joules to watt
         case .direct_radiation: return (0, 1/3600)
+        case .albedo: return (0, 100)
+        case .snow_depth: return (0, 1/100) // cm to metre. GRIB files show metre, but it is cm
         default: return nil
         }
     }
@@ -484,6 +496,9 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .shortwave_radiation: return ["ssrd"]
         case .precipitation: return ["tp"]
         case .direct_radiation: return ["tidirswrf"]
+        case .albedo: return ["al"]
+        case .snow_depth: return ["sd"]
+        case .snow_depth_water_equivalent: return ["sde"]
         }
     }
     
@@ -505,6 +520,9 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .wind_direction_10m: return 0.5
         case .wind_speed_100m: return 10
         case .wind_direction_100m: return 0.5
+        case .albedo: return 1
+        case .snow_depth: return 100 // 1cm res
+        case .snow_depth_water_equivalent: return 10 // 0.1mm res
         }
     }
     
@@ -525,6 +543,9 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .shortwave_radiation: return .wattPerSquareMetre
         case .precipitation: return .millimetre
         case .direct_radiation: return .wattPerSquareMetre
+        case .albedo: return .percentage
+        case .snow_depth: return .metre
+        case .snow_depth_water_equivalent: return .millimetre
         }
     }
 }
