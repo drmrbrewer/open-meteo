@@ -15,8 +15,10 @@ on:
       - master
     # reduce the number of builds by limiting automatic builds being triggered only with a push to *this* yml file (e.g. to change the docker tag version number):
     # can trigger a build manually too via: https://github.com/drmrbrewer/open-meteo/actions/workflows/docker-buildx.yml
+    # UPDATE: I have disabled automatic triggering of this workflow for now by appending '-disabled' to the file name
+    # such that it will never trigger because this file does not exist... remove that to re-enabled automatic triggering...
     paths:
-      - '.github/workflows/docker-buildx.yml'
+      - '.github/workflows/docker-buildx-disabled.yml'
 
 jobs:
   push_to_registry:
