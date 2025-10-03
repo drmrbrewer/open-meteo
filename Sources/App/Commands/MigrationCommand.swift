@@ -81,7 +81,7 @@ struct MigrationCommand: AsyncCommand {
 
     /// Read om file and write it as version 3 and reshape data to proper 3d files
     /// If no grid is given, assume that files are converted 1:1. This is the case for the DEM model
-    func convertToNewFormat(logger: Logger, file: String, grid: Gridable?, execute: Bool) async throws {
+    func convertToNewFormat(logger: Logger, file: String, grid: (any Gridable)?, execute: Bool) async throws {
         let temporary = "\(file)~"
         FileManager.default.waitIfFileWasRecentlyModified(at: temporary)
         try FileManager.default.removeItemIfExists(at: temporary)
@@ -131,9 +131,7 @@ struct MigrationCommand: AsyncCommand {
             try writeFn.close()
 
             /// Read data again to ensure the written data matches exactly
-            guard let verify = try await OmFileReader(mmapFile: temporary).asArray(of: Float.self)?.read() else {
-                fatalError("Could not read temporary file")
-            }
+            let verify = try await OmFileReader(mmapFile: temporary).expectArray(of: Float.self).read()
             guard data.isSimilar(verify) else {
                 fatalError("Data does not match")
             }
@@ -205,9 +203,7 @@ struct MigrationCommand: AsyncCommand {
         try writeFn.close()
 
         /// Read data again to ensure the written data matches exactly
-        guard let verify = try await OmFileReader(mmapFile: temporary).asArray(of: Float.self) else {
-            fatalError("Could not read temporary file")
-        }
+        let verify = try await OmFileReader(mmapFile: temporary).expectArray(of: Float.self)
         let progressVerify = TransferAmountTracker(logger: logger, totalSize: 4 * Int(dimensions.reduce(1, *)), name: "Verify")
         for yStart in stride(from: 0, to: ny, by: UInt64.Stride(chunksOut[0])) {
             for xStart in stride(from: 0, to: nx, by: UInt64.Stride(chunksOut[1])) {

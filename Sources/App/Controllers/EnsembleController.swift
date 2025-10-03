@@ -1,4 +1,4 @@
-import Foundation
+/*import Foundation
 import Vapor
 
 /**
@@ -99,7 +99,7 @@ public struct EnsembleApiController: Sendable {
                     )
                 }
                 guard !readers.isEmpty else {
-                    throw ForecastapiError.noDataAvilableForThisLocation
+                    throw ForecastApiError.noDataAvailableForThisLocation
                 }
                 return .init(timezone: timezone, time: timeLocal, locationId: prepared.locationId, results: readers)
             }
@@ -132,6 +132,7 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
 
     case ecmwf_ifs04
     case ecmwf_ifs025
+    case ecmwf_aifs025
 
     case gem_global
 
@@ -143,6 +144,9 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
 
     case ukmo_global_ensemble_20km
     case ukmo_uk_ensemble_2km
+    
+    case meteoswiss_icon_ch1
+    case meteoswiss_icon_ch2
 
     /// Return the required readers for this domain configuration
     /// Note: last reader has highes resolution data
@@ -162,6 +166,8 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
             return try await EcmwfReader(domain: .ifs04_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
         case .ecmwf_ifs025:
             return try await EcmwfReader(domain: .ifs025_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
+        case .ecmwf_aifs025:
+            return try await EcmwfReader(domain: .aifs025_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
         case .gfs025:
             return try await GfsReader(domains: [.gfs025_ens], lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
         case .gfs05:
@@ -176,6 +182,10 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
             return try await UkmoReader(domain: .global_ensemble_20km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
         case .ukmo_uk_ensemble_2km:
             return try await UkmoReader(domain: .uk_ensemble_2km, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
+        case .meteoswiss_icon_ch1:
+            return try await MeteoSwissReader(domain: .icon_ch1_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
+        case .meteoswiss_icon_ch2:
+            return try await MeteoSwissReader(domain: .icon_ch2_ensemble, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options).flatMap({ [$0] }) ?? []
         }
     }
 
@@ -183,31 +193,37 @@ enum EnsembleMultiDomains: String, RawRepresentableString, CaseIterable, MultiDo
     var countEnsembleMember: Int {
         switch self {
         case .icon_seamless:
-            return IconDomains.iconEps.ensembleMembers
+            return IconDomains.iconEps.countEnsembleMember
         case .icon_global:
-            return IconDomains.iconEps.ensembleMembers
+            return IconDomains.iconEps.countEnsembleMember
         case .icon_eu:
-            return IconDomains.iconEuEps.ensembleMembers
+            return IconDomains.iconEuEps.countEnsembleMember
         case .icon_d2:
-            return IconDomains.iconD2Eps.ensembleMembers
+            return IconDomains.iconD2Eps.countEnsembleMember
         case .ecmwf_ifs04:
-            return EcmwfDomain.ifs04_ensemble.ensembleMembers
+            return EcmwfDomain.ifs04_ensemble.countEnsembleMember
         case .ecmwf_ifs025:
-            return EcmwfDomain.ifs025_ensemble.ensembleMembers
+            return EcmwfDomain.ifs025_ensemble.countEnsembleMember
+        case .ecmwf_aifs025:
+            return EcmwfDomain.aifs025_ensemble.countEnsembleMember
         case .gfs025:
-            return GfsDomain.gfs025_ens.ensembleMembers
+            return GfsDomain.gfs025_ens.countEnsembleMember
         case .gfs05:
-            return GfsDomain.gfs05_ens.ensembleMembers
+            return GfsDomain.gfs05_ens.countEnsembleMember
         case .gfs_seamless:
-            return GfsDomain.gfs05_ens.ensembleMembers
+            return GfsDomain.gfs05_ens.countEnsembleMember
         case .gem_global:
-            return GemDomain.gem_global_ensemble.ensembleMembers
+            return GemDomain.gem_global_ensemble.countEnsembleMember
         case .bom_access_global_ensemble:
-            return BomDomain.access_global_ensemble.ensembleMembers
+            return BomDomain.access_global_ensemble.countEnsembleMember
         case .ukmo_global_ensemble_20km:
-            return UkmoDomain.global_ensemble_20km.ensembleMembers
+            return UkmoDomain.global_ensemble_20km.countEnsembleMember
         case .ukmo_uk_ensemble_2km:
-            return UkmoDomain.uk_ensemble_2km.ensembleMembers
+            return UkmoDomain.uk_ensemble_2km.countEnsembleMember
+        case .meteoswiss_icon_ch1:
+            return MeteoSwissDomain.icon_ch1_ensemble.countEnsembleMember
+        case .meteoswiss_icon_ch2:
+            return MeteoSwissDomain.icon_ch2_ensemble.countEnsembleMember
         }
     }
 
@@ -496,3 +512,4 @@ enum EnsembleVariableDaily: String, DailyVariableCalculatable, RawRepresentableS
     }
 }
 
+*/

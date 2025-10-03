@@ -3,34 +3,45 @@ import SwiftNetCDF
 import Foundation
 import Logging
 
+
 /// Downloaders return FileHandles to keep files open while downloading
 /// If another download starts and would overlap, this still keeps the old file open
 struct GenericVariableHandle: Sendable {
     let variable: GenericVariable
-    let time: Timestamp
+    let time: TimerangeDt
     let member: Int
-    private let fn: FileHandle
+    let reader: OmFileReaderArray<MmapFile, Float>
 
-    public init(variable: GenericVariable, time: Timestamp, member: Int, fn: FileHandle) {
+    public init(variable: GenericVariable, time: Timestamp, member: Int, fn: FileHandle, domain: GenericDomain) async throws {
+        self.reader = try await OmFileReader(fn: try MmapFile(fn: fn)).expectArray(of: Float.self)
+        let dimensions = reader.getDimensions()
+        let nt = dimensions.count == 3 ? Int(dimensions[2]) : 1
+        guard dimensions[0] == domain.grid.ny && dimensions[1] == domain.grid.nx else {
+            fatalError("Dimensions do not match \(dimensions). Ny \(domain.grid.ny), Nx \(domain.grid.nx)")
+        }
+        self.time = TimerangeDt(start: time, nTime: nt, dtSeconds: domain.dtSeconds)
+        self.variable = variable
+        self.member = member
+    }
+    
+    public init(variable: GenericVariable, time: TimerangeDt, member: Int, reader: OmFileReaderArray<MmapFile, Float>) {
         self.variable = variable
         self.time = time
         self.member = member
-        self.fn = fn
-    }
-
-    public func makeReader() async throws -> OmFileReaderArray<MmapFile, Float> {
-        try await OmFileReader(fn: try MmapFile(fn: fn)).asArray(of: Float.self)!
+        self.reader = reader
     }
 
     /// Process concurrently
-    static func convert(logger: Logger, domain: GenericDomain, createNetcdf: Bool, run: Timestamp?, handles: [Self], concurrent: Int, writeUpdateJson: Bool, uploadS3Bucket: String?, uploadS3OnlyProbabilities: Bool, compression: OmCompressionType = .pfor_delta2d_int16) async throws {
-        let startTime = DispatchTime.now()
-        try await convertConcurrent(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: handles, onlyGeneratePreviousDays: false, concurrent: concurrent, compression: compression)
-        logger.info("Convert completed in \(startTime.timeElapsedPretty())")
+    static func convert(logger: Logger, domain: GenericDomain, createNetcdf: Bool, run: Timestamp?, handles: [Self], concurrent: Int, writeUpdateJson: Bool, uploadS3Bucket: String?, uploadS3OnlyProbabilities: Bool, compression: OmCompressionType = .pfor_delta2d_int16, generateFullRun: Bool = true, generateTimeSeries: Bool = true) async throws {
+        if generateTimeSeries {
+            let startTime = DispatchTime.now()
+            try await convertConcurrent(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: handles, onlyGeneratePreviousDays: false, concurrent: concurrent, compression: compression)
+            logger.info("Convert completed in \(startTime.timeElapsedPretty())")
+        }
 
         /// Write new model meta data, but only of it contains temperature_2m, precipitation, 10m wind or pressure. Ignores e.g. upper level runs
-        if writeUpdateJson, let run, handles.contains(where: { ["temperature_2m", "precipitation", "precipitation_probability", "wind_u_component_10m", "pressure_msl", "river_discharge", "ocean_u_current", "wave_height", "pm10", "methane", "shortwave_radiation"].contains($0.variable.omFileName.file) }) {
-            let end = handles.max(by: { $0.time < $1.time })?.time.add(domain.dtSeconds) ?? Timestamp(0)
+        if generateTimeSeries, writeUpdateJson, let run, handles.contains(where: { ["temperature_2m", "precipitation", "precipitation_probability", "wind_u_component_10m", "pressure_msl", "river_discharge", "ocean_u_current", "wave_height", "pm10", "methane", "shortwave_radiation"].contains($0.variable.omFileName.file) }) {
+            let end = handles.max(by: { $0.time.range.lowerBound < $1.time.range.lowerBound })?.time.range.lowerBound.add(domain.dtSeconds) ?? Timestamp(0)
 
             // let writer = OmFileWriter(dim0: 1, dim1: 1, chunk0: 1, chunk1: 1)
 
@@ -59,28 +70,142 @@ struct GenericVariableHandle: Sendable {
             try ModelUpdateMetaJson.update(domain: domain, run: run, end: end, now: current)
         }
 
-        if let uploadS3Bucket = uploadS3Bucket {
-            logger.info("AWS upload to bucket \(uploadS3Bucket)")
-            let startTimeAws = DispatchTime.now()
-            let variables = handles.map { $0.variable }.uniqued(on: { $0.omFileName.file })
-            do {
-                try domain.domainRegistry.syncToS3(
-                    bucket: uploadS3Bucket,
-                    variables: uploadS3OnlyProbabilities ? [ProbabilityVariable.precipitation_probability] : variables
-                )
-            } catch {
-                logger.error("Sync to AWS failed: \(error)")
-            }
-            logger.info("AWS upload completed in \(startTimeAws.timeElapsedPretty())")
+        if generateTimeSeries, let uploadS3Bucket = uploadS3Bucket {
+            try domain.domainRegistry.syncToS3(
+                logger: logger,
+                bucket: uploadS3Bucket,
+                variables: uploadS3OnlyProbabilities ? [ProbabilityVariable.precipitation_probability] : nil
+            )
         }
 
-        if let run {
+        if generateTimeSeries, let run {
             // if run is nil, do not attempt to generate previous days files
             logger.info("Convert previous day database if required")
             let startTimePreviousDays = DispatchTime.now()
             try await convertConcurrent(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: handles, onlyGeneratePreviousDays: true, concurrent: concurrent, compression: compression)
             logger.info("Previous day convert in \(startTimePreviousDays.timeElapsedPretty())")
+            
+            /// Only upload to S3 if not ensemble domain. Ensemble domains set `uploadS3OnlyProbabilities`
+            if !uploadS3OnlyProbabilities, let uploadS3Bucket {
+                try domain.domainRegistry.syncToS3(
+                    logger: logger,
+                    bucket: uploadS3Bucket,
+                    variables: nil
+                )
+            }
         }
+        
+        if generateFullRun, OpenMeteo.dataRunDirectory != nil, let run, run.hour % 3 == 0 {
+            logger.info("Generate full run data")
+            let startTimeFullRun = DispatchTime.now()
+            try await generateFullRunData(logger: logger, domain: domain, run: run, handles: handles, concurrent: concurrent, compression: compression)
+            logger.info("Full run convert in \(startTimeFullRun.timeElapsedPretty())")
+            
+            if let uploadS3Bucket {
+                try domain.domainRegistry.syncToS3PerRun(
+                    logger: logger,
+                    bucket: uploadS3Bucket,
+                    run:run
+                )
+            }
+        }
+    }
+    
+    /// Generate time-series optimised files for each variable per run. `/data_run/<domain>/<run>/<variable>.om`
+    static func generateFullRunData(logger: Logger, domain: GenericDomain, run: Timestamp, handles: [Self], concurrent: Int, compression: OmCompressionType) async throws {
+        let grid = domain.grid
+        let nx = grid.nx
+        let ny = grid.ny
+
+        try await handles.filter({FullRunsVariables.includes($0.variable.omFileName.file)}).groupedPreservedOrder(by: \.variable.omFileName.file).foreachConcurrent(nConcurrent: concurrent) { (_, handles) in
+            let variable = handles[0].variable
+            let nMembers = (handles.max(by: { $0.member < $1.member })?.member ?? 0) + 1
+            let nMembersStr = nMembers > 1 ? " (\(nMembers) nMembers)" : ""
+            let time: [Timestamp] = handles.flatMap({Array($0.time)}).uniqued().sorted()
+            let nTime = time.count
+            
+            let progress = TransferAmountTracker(logger: logger, totalSize: nx * ny * nTime * nMembers * MemoryLayout<Float>.size, name: "Convert \(variable.rawValue)\(nMembersStr) \(nTime) timesteps")
+            
+            let file = OmFileType.run(domain: domain.domainRegistry, variable: variable.omFileName.file, run: run.toIsoDateTime())
+            try file.createDirectory()
+            let filePath = file.getFilePath()
+            let fileTemp = "\(filePath)~"
+            try FileManager.default.removeItemIfExists(at: fileTemp)
+            let fn = try FileHandle.createNewFile(file: fileTemp)
+            
+            let chunknLocations = max(1, min(1024 / nTime / nMembers, nx))
+            let chunks = nMembers > 1 ? [1, 1, chunknLocations, nTime] : [1, chunknLocations, nTime]
+            let dimensions = nMembers > 1 ? [ny, nx, nMembers, nTime] : [ny, nx, nTime]
+            let coordinatesString =  nMembers > 1 ? "lat lon member time" : "lat lon time"
+            
+            let processChunkX = max(1, min(nx, 2 * 1024 * 1024 / nTime / nMembers / chunknLocations * chunknLocations))
+            let processChunkY = max(1, min(ny, 2 * 1024 * 1024 / nTime / nMembers / processChunkX))
+            
+            let writeFile = OmFileWriter(fn: fn, initialCapacity: 4 * 1024)
+            let writer = try writeFile.prepareArray(
+                type: Float.self,
+                dimensions: dimensions.map(UInt64.init),
+                chunkDimensions: chunks.map(UInt64.init),
+                compression: compression,
+                scale_factor: variable.scalefactor,
+                add_offset: 0
+            )
+            
+            for yRange in (0..<UInt64(ny)).chunks(ofCount: processChunkY) {
+                for xRange in (0..<UInt64(nx)).chunks(ofCount: processChunkX) {
+                    let memberRange = 0 ..< UInt64(nMembers)
+                    
+                    let thisChunkDimensions = nMembers <= 1 ?
+                        [UInt64(yRange.count), UInt64(xRange.count), UInt64(nTime)] :
+                        [UInt64(yRange.count), UInt64(xRange.count), UInt64(nMembers), UInt64(nTime)]
+                    
+                    let nLoc = yRange.count * xRange.count
+                    var data3d = Array3DFastTime(nLocations: nLoc, nLevel: memberRange.count, nTime: nTime)
+                    for reader in handles {
+                        let dimensions = reader.reader.getDimensions()
+                        let timeArrayIndex = time.firstIndex(of: reader.time.range.lowerBound)!
+                        if dimensions.count == 3 {
+                            /// Number of time steps in this file
+                            let nt = dimensions[2]
+                            guard nt == reader.time.count else {
+                                fatalError("invalid timesteps")
+                            }
+                            let read = try! await reader.reader.read(range: [yRange, xRange, 0..<nt])
+                            data3d[0..<nLoc, reader.member, timeArrayIndex ..< timeArrayIndex + Int(nt)] = read[0..<nLoc * Int(nt)]
+                        } else {
+                            // Single time step
+                            let read = try! await reader.reader.read(range: [yRange, xRange])
+                            data3d[0..<nLoc, reader.member, timeArrayIndex] = read[0..<nLoc]
+                        }
+                    }
+                    try writer.writeData(
+                        array: data3d.data,
+                        arrayDimensions: thisChunkDimensions
+                    )
+                    progress.add(data3d.data.count * MemoryLayout<Float>.size)
+                }
+            }
+            let arrayFinalised = try writer.finalise()
+            let createdAt = try writeFile.write(value: Timestamp.now().timeIntervalSince1970, name: "created_at", children: [])
+            let coordinates = try writeFile.write(value: coordinatesString, name: "coordinates", children: [])
+            let runTime: OmOffsetSize? = try writeFile.write(value: run.timeIntervalSince1970, name: "forecast_reference_time", children: [])
+            let validTimeArray = try writeFile.writeArray(
+                data: time.map(\.timeIntervalSince1970),
+                dimensions: [UInt64(nTime)],
+                chunkDimensions: [UInt64(nTime)],
+                compression: .pfor_delta2d,
+                scale_factor: 1,
+                add_offset: 0
+            )
+            let validTime = try writeFile.write(array: validTimeArray, name: "time", children: [])
+            let root = try writeFile.write(array: arrayFinalised, name: "", children: [runTime, validTime, coordinates, createdAt].compactMap({$0}))
+            try writeFile.writeTrailer(rootVariable: root)
+            
+            try FileManager.default.moveFileOverwrite(from: fileTemp, to: filePath)
+            progress.finish()
+        }
+        let validTimes = handles.flatMap({$0.time.map({$0})}).uniqued().sorted()
+        try FullRunMetaJson.write(domain: domain, run: run, validTimes: validTimes)
     }
 
     private static func convertConcurrent(logger: Logger, domain: GenericDomain, createNetcdf: Bool, run: Timestamp?, handles: [Self], onlyGeneratePreviousDays: Bool, concurrent: Int, compression: OmCompressionType) async throws {
@@ -106,37 +231,28 @@ struct GenericVariableHandle: Sendable {
         let dtSeconds = domain.dtSeconds
 
         for (_, handles) in handles.groupedPreservedOrder(by: { "\($0.variable.omFileName.file)" }) {
-            let readers: [(time: TimerangeDt, reader: OmFileReaderArray<MmapFile, Float>, member: Int)] = try await handles.grouped(by: { $0.time }).asyncFlatMap { time, h in
-                return try await h.asyncMap {
-                    let reader = try await $0.makeReader()
-                    let dimensions = reader.getDimensions()
-                    let nt = dimensions.count == 3 ? Int(dimensions[2]) : 1
-                    guard dimensions[0] == ny && dimensions[1] == nx else {
-                        fatalError("Dimensions do not match \(dimensions). Ny \(ny), Nx \(nx)")
-                    }
-                    let time = TimerangeDt(start: time, nTime: nt, dtSeconds: dtSeconds)
-                    return(time, reader, $0.member)
-                }
-            }
-            guard let timeMin = readers.min(by: { $0.time.range.lowerBound < $1.time.range.lowerBound })?.time.range.lowerBound else {
+            guard let timeMin = handles.min(by: { $0.time.range.lowerBound < $1.time.range.lowerBound })?.time.range.lowerBound else {
                 logger.warning("No data to convert")
                 return
             }
-            guard let timeMax = readers.max(by: { $0.time.range.upperBound < $1.time.range.upperBound })?.time.range.upperBound else {
+            guard let timeMax = handles.max(by: { $0.time.range.upperBound < $1.time.range.upperBound })?.time.range.upperBound else {
                 logger.warning("No data to convert")
                 return
             }
-            guard let maxTimeStepsPerFile = readers.max(by: { $0.time.count < $1.time.count })?.time.count else {
+            guard let maxTimeStepsPerFile = handles.max(by: { $0.time.count < $1.time.count })?.time.count else {
                 logger.warning("No data to convert")
                 return
             }
             /// `timeMinMax.min.time` has issues with `skip`
-            /// Start time (timeMinMax.min) might be before run time in case of MF wave which contains hindcast data
+            /// Start time (timeMinMax.min) might be before run time in case of MF wave which contains hind-cast data
             let startTime = min(run ?? timeMin, timeMin)
             let time = TimerangeDt(range: startTime..<timeMax, dtSeconds: dtSeconds)
 
             let variable = handles[0].variable
-            let nMembers = (handles.max(by: { $0.member < $1.member })?.member ?? 0) + 1
+            /// Number of members in the current download. Might be lower than the actual domain member count. E.g. MeteoSwiss sometimes includes fewer members
+            let nMembersInVariables = (handles.max(by: { $0.member < $1.member })?.member ?? 0) + 1
+            /// nMembers might be set to 1 for variables like precipitation probability. Otherwise use `countEnsembleMember`
+            let nMembers = nMembersInVariables == 1 ? 1 : domain.countEnsembleMember
             let nMembersStr = nMembers > 1 ? " (\(nMembers) nMembers)" : ""
 
             let storePreviousForecast = variable.storePreviousForecast && nMembers <= 1
@@ -144,7 +260,7 @@ struct GenericVariableHandle: Sendable {
                 // No need to generate previous day forecast
                 continue
             }
-            /// If only one value is set, this could be the model initialisation or modifcation time
+            /// If only one value is set, this could be the model initialisation or modification time
             /// TODO: check if single value mode is still required
             // let isSingleValueVariable = readers.first?.reader.first?.fn.count == 1
 
@@ -154,28 +270,6 @@ struct GenericVariableHandle: Sendable {
                                     chunknLocations: nMembers > 1 ? nMembers : nil*/
             )
             // let nLocationsPerChunk = om.nLocationsPerChunk
-            
-            /*if false && !onlyGeneratePreviousDays {
-                try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
-                let fn = try FileHandle.createNewFile(file: "\(domain.downloadDirectory)\(variable.omFileName.file).om", overwrite: true)
-                let writeFile = OmFileWriter(fn: fn, initialCapacity: 4 * 1024)
-                let writer = try writeFile.prepareArray(
-                    type: Float.self,
-                    dimensions: [ny, nx, readers.count].map(UInt64.init),
-                    chunkDimensions: [1, 12, UInt64(readers.count)],
-                    compression: .pfor_delta2d_int16,
-                    scale_factor: variable.scalefactor,
-                    add_offset: 0
-                )
-                var data = [Float]()
-                data.reserveCapacity(grid.count * readers.count)
-                for (i,reader) in readers.enumerated() {
-                    data.append(contentsOf: try reader.reader.read())
-                }
-                try writer.writeData(array: Array2DFastSpace(data: data, nLocations: grid.count, nTime: readers.count).transpose().data)
-                let root = try writeFile.write(array: writer.finalise(), name: "", children: [])
-                try writeFile.writeTrailer(rootVariable: root)
-            }*/
 
             // Create netcdf file for debugging
             if createNetcdf && !onlyGeneratePreviousDays {
@@ -195,8 +289,8 @@ struct GenericVariableHandle: Sendable {
                 try ncVariable.setAttribute("scale_factor", 1/variable.scalefactor)
                 try ncVariable.setAttribute("add_offset", Float(0))
                 try ncVariable.setAttribute("_FillValue", Int16.max)
-                for reader in readers {
-                    let data = try await reader.reader.read()
+                for reader in handles {
+                    let data = try! await reader.reader.read()
                     let nt = reader.time.count
                     let timeArrayIndex = time.index(of: reader.time.range.lowerBound)!
                     if nt > 1 {
@@ -222,18 +316,23 @@ struct GenericVariableHandle: Sendable {
                 let nLoc = yRange.count * xRange.count
                 var data3d = Array3DFastTime(nLocations: nLoc, nLevel: memberRange.count, nTime: time.count)
                 var readTemp = [Float](repeating: .nan, count: nLoc * maxTimeStepsPerFile)
-                data3d.data.fillWithNaNs()
-                for reader in readers {
+                for reader in handles {
                     let dimensions = reader.reader.getDimensions()
                     let timeArrayIndex = time.index(of: reader.time.range.lowerBound)!
+                    guard memberRange.contains(UInt64(reader.member)) else {
+                        fatalError("Invalid reader.member \(reader.member) for range \(memberRange)")
+                    }
                     if dimensions.count == 3 {
                         /// Number of time steps in this file
                         let nt = dimensions[2]
-                        try await reader.reader.read(into: &readTemp, range: [yRange, xRange, 0..<nt])
+                        guard nt == reader.time.count else {
+                            fatalError("invalid timesteps")
+                        }
+                        try! await reader.reader.read(into: &readTemp, range: [yRange, xRange, 0..<nt])
                         data3d[0..<nLoc, reader.member, timeArrayIndex ..< timeArrayIndex + Int(nt)] = readTemp[0..<nLoc * Int(nt)]
                     } else {
                         // Single time step
-                        try await reader.reader.read(into: &readTemp, range: [yRange, xRange])
+                        try! await reader.reader.read(into: &readTemp, range: [yRange, xRange])
                         data3d[0..<nLoc, reader.member, timeArrayIndex] = readTemp[0..<nLoc]
                     }
                 }
@@ -275,108 +374,6 @@ actor GenericVariableHandleStorage {
     }
 }
 
-/// Thread safe storage for downloading grib messages. Can be used to post process data.
-actor VariablePerMemberStorage<V: Hashable & Sendable> {
-    struct VariableAndMember: Hashable, Sendable {
-        let variable: V
-        let timestamp: Timestamp
-        let member: Int
-
-        func with(variable: V, timestamp: Timestamp? = nil) -> VariableAndMember {
-            .init(variable: variable, timestamp: timestamp ?? self.timestamp, member: self.member)
-        }
-
-        var timestampAndMember: TimestampAndMember {
-            return .init(timestamp: timestamp, member: member)
-        }
-    }
-
-    struct TimestampAndMember: Equatable {
-        let timestamp: Timestamp
-        let member: Int
-    }
-
-    var data = [VariableAndMember: Array2D]()
-
-    init(data: [VariableAndMember: Array2D] = [VariableAndMember: Array2D]()) {
-        self.data = data
-    }
-
-    func set(variable: V, timestamp: Timestamp, member: Int, data: Array2D) {
-        self.data[.init(variable: variable, timestamp: timestamp, member: member)] = data
-    }
-
-    func get(variable: V, timestamp: Timestamp, member: Int) -> Array2D? {
-        return data[.init(variable: variable, timestamp: timestamp, member: member)]
-    }
-
-    func get(_ variable: VariableAndMember) -> Array2D? {
-        return data[variable]
-    }
-
-    func getAndForget(_ variable: VariableAndMember) -> Array2D? {
-        let value = data[variable]
-        data.removeValue(forKey: variable)
-        return value
-    }
-}
-
-extension VariablePerMemberStorage {
-    /// Calculate wind speed and direction from U/V components for all available members an timesteps.
-    /// if `trueNorth` is given, correct wind direction due to rotated grid projections. E.g. DMI HARMONIE AROME using LambertCC
-    func calculateWindSpeed(u: V, v: V, outSpeedVariable: GenericVariable, outDirectionVariable: GenericVariable?, writer: OmRunSpatialWriter, trueNorth: [Float]? = nil, overwrite: Bool = false) throws -> [GenericVariableHandle] {
-        return try self.data
-            .groupedPreservedOrder(by: { $0.key.timestampAndMember })
-            .flatMap({ t, handles -> [GenericVariableHandle] in
-                guard let u = handles.first(where: { $0.key.variable == u }), let v = handles.first(where: { $0.key.variable == v }) else {
-                    return []
-                }
-                let speed = zip(u.value.data, v.value.data).map(Meteorology.windspeed)
-                let speedHandle = try writer.write(time: t.timestamp, member: t.member, variable: outSpeedVariable, data: speed, overwrite: overwrite)
-
-                if let outDirectionVariable {
-                    var direction = Meteorology.windirectionFast(u: u.value.data, v: v.value.data)
-                    if let trueNorth {
-                        direction = zip(direction, trueNorth).map({ ($0 - $1 + 360).truncatingRemainder(dividingBy: 360) })
-                    }
-                    let directionHandle = try writer.write(time: t.timestamp, member: t.member, variable: outDirectionVariable, data: direction, overwrite: overwrite)
-                    return [speedHandle, directionHandle]
-                }
-                return [speedHandle]
-            }
-        )
-    }
-
-    /// Generate elevation file
-    /// - `elevation`: in metres
-    /// - `landMask` 0 = sea, 1 = land. Fractions below 0.5 are considered sea.
-    func generateElevationFile(elevation: V, landmask: V, domain: GenericDomain) throws {
-        let elevationFile = domain.surfaceElevationFileOm
-        if FileManager.default.fileExists(atPath: elevationFile.getFilePath()) {
-            return
-        }
-        guard var elevation = self.data.first(where: { $0.key.variable == elevation })?.value.data,
-              let landMask = self.data.first(where: { $0.key.variable == landmask })?.value.data else {
-            return
-        }
-
-        try elevationFile.createDirectory()
-        for i in elevation.indices {
-            if elevation[i] >= 9000 {
-                fatalError("Elevation greater 90000")
-            }
-            if landMask[i] < 0.5 {
-                // mask sea
-                elevation[i] = -999
-            }
-        }
-        #if Xcode
-        try Array2D(data: elevation, nx: domain.grid.nx, ny: domain.grid.ny).writeNetcdf(filename: domain.surfaceElevationFileOm.getFilePath().replacingOccurrences(of: ".om", with: ".nc"))
-        #endif
-
-        try elevation.writeOmFile2D(file: elevationFile.getFilePath(), grid: domain.grid, createNetCdf: false)
-    }
-}
 
 /// Keep values from previous timestep. Actori isolated, because of concurrent data conversion
 actor GribDeaverager {
@@ -391,6 +388,15 @@ actor GribDeaverager {
         let previous = data[key]
         data[key] = (step, d)
         return previous
+    }
+    
+    /// Get the last step of variable + member
+    func lastStep<V: Hashable>(_ variable: V, _ member: Int) -> Int? {
+        var hash = Hasher()
+        hash.combine(variable)
+        hash.combine(member)
+        let key = hash.finalize()
+        return data[key]?.step
     }
 
     /// Make a deep copy

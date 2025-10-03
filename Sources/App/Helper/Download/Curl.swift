@@ -18,6 +18,7 @@ enum CurlError: Error {
     case futimes(error: String)
     case contentLengthHeaderTooLarge(got: Int)
     case couldNotGetContentLengthForConcurrentDownload
+    case invalidURL(String)
 }
 
 
@@ -50,13 +51,16 @@ final class Curl: Sendable {
 
     /// Chunk size for concurrent downloads
     let chunkSize: Int
+    
+    /// Default throw if unauthorized error occures
+    let retryUnauthorized: Bool
 
     /// If the environment varibale `HTTP_CACHE` is set, use it as a directory to cache all HTTP requests
     static var cacheDirectory: String? {
         Environment.get("HTTP_CACHE")
     }
 
-    public init(logger: Logger, client: HTTPClient, deadLineHours: Double = 3, readTimeout: Int = 5 * 60, retryError4xx: Bool = true, waitAfterLastModified: TimeInterval? = nil, waitAfterLastModifiedBeforeDownload: TimeInterval? = nil, headers: [(String, String)] = .init(), chunkSizeMB: Int = 16) {
+    public init(logger: Logger, client: HTTPClient, deadLineHours: Double = 3, readTimeout: Int = 5 * 60, retryError4xx: Bool = true, waitAfterLastModified: TimeInterval? = nil, waitAfterLastModifiedBeforeDownload: TimeInterval? = nil, headers: [(String, String)] = .init(), chunkSizeMB: Int = 16, retryUnauthorized: Bool = false) {
         self.logger = logger
         self.deadline = Date().addingTimeInterval(TimeInterval(deadLineHours * 3600))
         self.retryError4xx = retryError4xx
@@ -66,6 +70,7 @@ final class Curl: Sendable {
         self.client = client
         self.headers = headers
         self.chunkSize = chunkSizeMB * (2 << 19)
+        self.retryUnauthorized = retryUnauthorized
     }
 
     deinit {
@@ -81,7 +86,7 @@ final class Curl: Sendable {
     /// Retry download start as many times until deadline is reached. As soon as the HTTP header is sucessfully returned, this function returns the HTTPClientResponse which can then be used to stream data
     func initiateDownload(url _url: String, range: String?, minSize: Int?, method: HTTPMethod = .GET, cacheDirectory: String? = Curl.cacheDirectory, deadline: Date?, nConcurrent: Int, quiet: Bool = false, waitAfterLastModifiedBeforeDownload: TimeInterval?, headers: [(String, String)] = []) async throws -> HTTPClientResponse {
         let deadline = deadline ?? self.deadline
-
+        
         if _url.starts(with: "file://") {
             guard let data = try FileHandle(forReadingAtPath: String(_url.dropFirst(7)))?.readToEnd() else {
                 fatalError("Could not read file \(_url.dropFirst(7))")
@@ -89,11 +94,6 @@ final class Curl: Sendable {
             var headers = HTTPHeaders()
             headers.add(name: "content-length", value: "\(data.count)")
             return HTTPClientResponse(status: .ok, headers: headers, body: .bytes(ByteBuffer(data: data)))
-        }
-
-        // Check in cache
-        if let cacheDirectory, method == .GET {
-            return try await initiateDownloadCached(url: _url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, nConcurrent: nConcurrent, headers: headers)
         }
 
         // Ensure sufficient wait time using head requests
@@ -105,18 +105,27 @@ final class Curl: Sendable {
         if nConcurrent > 1 {
             return try await initiateDownloadConcurrent(url: _url, range: range, minSize: nil, deadline: deadline, nConcurrent: nConcurrent)
         }
-
+        
+        // Check in cache
+        if let cacheDirectory, method == .GET {
+            return try await initiateDownloadCached(url: _url, range: range, minSize: minSize, cacheDirectory: cacheDirectory, nConcurrent: nConcurrent, headers: headers)
+        }
+        
         // URL might contain password, strip them from logging
         let url: String
-        let auth: String?
+        let user: String?
+        let password: String?
         if _url.contains("@") && _url.contains(":") {
-            let usernamePassword = _url.split(separator: "/", maxSplits: 1)[1].dropFirst().split(separator: "@", maxSplits: 1)[0]
-            auth = (usernamePassword).data(using: .utf8)!.base64EncodedString()
+            let usernamePassword = _url.split(separator: "/", maxSplits: 1)[1].dropFirst().split(separator: "@", maxSplits: 1)[0].split(separator: ":")
+            user = String(usernamePassword.first!)
+            password = usernamePassword.count > 1 ? String(usernamePassword[1]) : nil
             url = _url.stripHttpPassword()
         } else {
             url = _url
-            auth = nil
+            user = nil
+            password = nil
         }
+
         if !quiet && waitAfterLastModifiedBeforeDownload == nil {
             if let range {
                 logger.info("Downloading file \(url) [range \(range.padding(toLength: 20, withPad: ".", startingAt: 0))...]")
@@ -125,14 +134,19 @@ final class Curl: Sendable {
             }
         }
 
-        let request = {
+        let request = try {
             var request = HTTPClientRequest(url: url)
             request.method = method
+            if let user = user, let password = password {
+                if url.contains(".your-objectstorage.com") {
+                    let signer = AWSSigner(accessKey: user, secretKey: password, region: "us-west-2", service: "s3")
+                    try signer.sign(request: &request, body: nil)
+                } else {
+                    request.setBasicAuth(username: user, password: password)
+                }
+            }
             if let range = range {
                 request.headers.add(name: "range", value: "bytes=\(range)")
-            }
-            if let auth = auth {
-                request.headers.add(name: "Authorization", value: "Basic \(auth)")
             }
             request.headers.add(contentsOf: self.headers)
             request.headers.add(contentsOf: headers)
@@ -148,7 +162,7 @@ final class Curl: Sendable {
                 let response = try await client.execute(request, timeout: .seconds(Int64(readTimeout)))
                 if response.status != .ok && response.status != .partialContent {
                     // await print(try response.body.collect(upTo: 10000000).readStringImmutable())
-                    if response.status == .unauthorized {
+                    if !retryUnauthorized && response.status == .unauthorized {
                         throw CurlErrorNonRetry.unauthorized
                     }
                     throw CurlError.downloadFailed(code: response.status)
@@ -219,14 +233,17 @@ final class Curl: Sendable {
         let stream = chunks.mapStream(nConcurrent: nConcurrent) { chunk in
             let range = "\(chunk.lowerBound)-\(chunk.upperBound - 1)"
             let timeout = TimeoutTracker(logger: self.logger, deadline: deadline)
+            let chunkTimeOut = ExponentialBackOff(factor: .seconds(120), maximum: .seconds(300))
+            var i = 0
             while true {
+                i += 1
                 // 120 seconds timeout for each 16MB chunk
-                let deadlineShort = Date().addingTimeInterval(TimeInterval(120))
-                // Start the download and wait for the header
-                let response = try await self.initiateDownload(url: url, range: range, minSize: minSize, deadline: deadlineShort, nConcurrent: 1, quiet: true, waitAfterLastModifiedBeforeDownload: nil)
-
+                let deadLineChunk = chunkTimeOut.deadLine(attempt: i)
                 // Retry failed file transfers after this point
                 do {
+                    // Start the download and wait for the header
+                    let response = try await self.initiateDownload(url: url, range: range, minSize: minSize, deadline: deadLineChunk, nConcurrent: 1, quiet: true, waitAfterLastModifiedBeforeDownload: nil)
+                
                     var buffer = ByteBuffer()
                     let contentLength = try response.contentLength()
                     // let tracker = TransferAmountTracker(logger: self.logger, totalSize: contentLength)
@@ -235,8 +252,11 @@ final class Curl: Sendable {
                     }
                     for try await fragement in response.body {
                         // await tracker.add(fragement.readableBytes)
-                        if Date() > deadlineShort {
+                        if Date() > deadLineChunk {
                             throw CurlError.timeoutPerChunkReached(httpRange: chunk)
+                        }
+                        if Date() > deadline {
+                            throw CurlError.timeoutReached
                         }
                         try Task.checkCancellation()
                         buffer.writeImmutableBuffer(fragement)
@@ -311,12 +331,12 @@ final class Curl: Sendable {
 
     /// Use http-async http client to download
     /// `minSize` retry download if file is too small. Happens a lot with NOAA servers while files are uploaded while downloaded
-    func downloadInMemoryAsync(url: String, range: String? = nil, minSize: Int?, bzip2Decode: Bool = false, nConcurrent: Int = 1, deadLineHours: Double? = nil, headers: [(String, String)] = []) async throws -> ByteBuffer {
+    func downloadInMemoryAsync(url: String, range: String? = nil, minSize: Int?, bzip2Decode: Bool = false, nConcurrent: Int = 1, deadLineHours: Double? = nil, headers: [(String, String)] = [], quiet: Bool = false) async throws -> ByteBuffer {
         let deadline = deadLineHours.map { Date().addingTimeInterval(TimeInterval($0 * 3600)) } ?? deadline
         let timeout = TimeoutTracker(logger: logger, deadline: deadline)
         while true {
             // Start the download and wait for the header
-            let response = try await initiateDownload(url: url, range: range, minSize: minSize, deadline: deadline, nConcurrent: nConcurrent, waitAfterLastModifiedBeforeDownload: waitAfterLastModifiedBeforeDownload, headers: headers)
+            let response = try await initiateDownload(url: url, range: range, minSize: minSize, deadline: deadline, nConcurrent: nConcurrent, quiet: quiet, waitAfterLastModifiedBeforeDownload: waitAfterLastModifiedBeforeDownload, headers: headers)
 
             // Retry failed file transfers after this point
             do {

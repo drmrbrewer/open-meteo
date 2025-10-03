@@ -42,20 +42,15 @@ struct MetNoDownloader: AsyncCommand {
 
         logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
 
-        let handles = try download(logger: logger, domain: domain, variables: variables, run: run)
+        let handles = try await download(logger: logger, domain: domain, variables: variables, run: run, uploadS3Bucket: signature.uploadS3Bucket)
         let nConcurrent = signature.concurrent ?? 1
         try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let timesteps = Array(handles.map { $0.time }.uniqued().sorted())
-            try domain.domainRegistry.syncToS3Spatial(bucket: uploadS3Bucket, timesteps: timesteps)
-        }
 
         logger.info("Finished in \(start.timeElapsedPretty())")
     }
 
     /// Process each variable and update time-series optimised files
-    func download(logger: Logger, domain: MetNoDomain, variables: [MetNoVariable], run: Timestamp) throws -> [GenericVariableHandle] {
+    func download(logger: Logger, domain: MetNoDomain, variables: [MetNoVariable], run: Timestamp, uploadS3Bucket: String?) async throws -> [GenericVariableHandle] {
         Process.alarm(seconds: 3 * 3600)
         defer { Process.alarm(seconds: 0) }
 
@@ -129,7 +124,9 @@ struct MetNoDownloader: AsyncCommand {
             return
         }*/
 
-        return try variables.flatMap { variable in
+        let writer = OmSpatialMultistepWriter(domain: domain, run: run, storeOnDisk: true, realm: nil)
+        
+        for variable in variables {
             logger.info("Download \(variable)")
 
             guard let ncVar = ncFile.getVariable(name: variable.netCdfName) else {
@@ -152,64 +149,12 @@ struct MetNoDownloader: AsyncCommand {
                     spatial.data[i] = .nan
                 }
             }
-
-            return try (0..<nTime).map { t in
-                let writer = OmRunSpatialWriter(domain: domain, run: run, storeOnDisk: true)
+            for t in (0..<nTime) {
                 let data = Array(spatial[t, 0..<spatial.nLocations])
-                return try writer.write(time: run.add(hours: t), member: 0, variable: variable, data: data)
+                try await writer.write(time: run.add(hours: t), member: 0, variable: variable, data: data)
             }
         }
-    }
-}
-
-extension DomainRegistry {
-    /// Upload all data to a specified S3 bucket
-    func syncToS3(bucket: String, variables: [GenericVariable]?) throws {
-        let dir = rawValue
-        if let variables {
-            let vDirectories = variables.map { $0.omFileName.file } + ["static"]
-            for variable in vDirectories {
-                if variable.contains("_previous_day") {
-                    // do not upload data from past days yet
-                    continue
-                }
-                let src = "\(OpenMeteo.dataDirectory)\(dir)/\(variable)"
-                let dest = "s3://\(bucket)/data/\(dir)/\(variable)"
-                if !FileManager.default.fileExists(atPath: src) {
-                    continue
-                }
-                try Process.spawnRetried(
-                    cmd: "aws",
-                    args: ["s3", "sync", "--exclude", "*~", "--no-progress", src, dest]
-                )
-            }
-        } else {
-            let src = "\(OpenMeteo.dataDirectory)\(dir)"
-            let dest = "s3://\(bucket)/data/\(dir)"
-            try Process.spawnRetried(
-                cmd: "aws",
-                args: ["s3", "sync", "--exclude", "*~", "--no-progress", src, dest]
-            )
-        }
-    }
-    
-    /// Upload spatial files to S3 `/data_spatial/<domain>/YYYY/MM/DD/HHMMZ/<variable>.om`
-    func syncToS3Spatial(bucket: String, timesteps: [Timestamp]) throws {
-        let dir = rawValue
-        guard let directorySpatial = OpenMeteo.dataSpatialDirectory else {
-            return
-        }
-        for timestep in timesteps {
-            let src = "\(directorySpatial)\(dir)/\(timestep.format_directoriesYYYYMMddhhmm)/"
-            let dest = "s3://\(bucket)/data_spatial/\(dir)/\(timestep.format_directoriesYYYYMMddhhmm)"
-            if !FileManager.default.fileExists(atPath: src) {
-                continue
-            }
-            try Process.spawnRetried(
-                cmd: "aws",
-                args: ["s3", "sync", "--exclude", "*~", "--no-progress", src, dest]
-            )
-        }
+        return try await writer.finalise(completed: true, validTimes: nil, uploadS3Bucket: uploadS3Bucket)
     }
 }
 
@@ -245,6 +190,9 @@ extension NetCDF {
             return try open(path: path, allowUpdate: allowUpdate)
         } catch NetCDFError.ncerror(code: let code, error: let error) {
             if error == "NetCDF: file not found" {
+                return nil
+            }
+            if error == "NetCDF: I/O failure" {
                 return nil
             }
             throw NetCDFError.ncerror(code: code, error: error)

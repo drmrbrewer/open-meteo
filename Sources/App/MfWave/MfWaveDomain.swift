@@ -15,6 +15,10 @@ enum MfWaveDomain: String, CaseIterable, GenericDomain {
     var masterTimeRange: Range<Timestamp>? {
         return nil
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     var domainRegistry: DomainRegistry {
         switch self {
@@ -48,7 +52,7 @@ enum MfWaveDomain: String, CaseIterable, GenericDomain {
         }
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .mfwave, .mfsst, .mfcurrents:
             // Important: GRID needs to be aligned to center points by dx/2 and dy/2

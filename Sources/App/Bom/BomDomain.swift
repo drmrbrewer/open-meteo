@@ -10,7 +10,7 @@ enum BomDomain: String, GenericDomain, CaseIterable {
     case access_global
     case access_global_ensemble
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .access_global:
             return RegularGrid(nx: 2048, ny: 1536, latMin: -89.941406, lonMin: -179.912109, dx: 360 / 2048, dy: 180 / 1536)
@@ -28,7 +28,7 @@ enum BomDomain: String, GenericDomain, CaseIterable {
         }
     }
 
-    var ensembleMembers: Int {
+    var countEnsembleMember: Int {
         switch self {
         case .access_global_ensemble:
             return 17 + 1
@@ -84,10 +84,10 @@ enum BomDomain: String, GenericDomain, CaseIterable {
         switch self {
         case .access_global:
             // Delay of 8:50 hours (0/12z) or 7:15 (6/18z) after initialisation with 4 runs a day
-            return t.add(hours: -7).with(hour: ((t.hour - 7 + 24) % 24) / 6 * 6)
+            return t.add(hours: -7).floor(toNearestHour: 6)
         case .access_global_ensemble:
             // Delay of 14:15 hours, 4 runs
-            return t.add(hours: -14).with(hour: ((t.hour - 14 + 24) % 24) / 6 * 6)
+            return t.add(hours: -14).floor(toNearestHour: 6)
         }
     }
 }

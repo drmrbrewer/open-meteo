@@ -26,6 +26,10 @@ enum GfsGraphCastDomain: String, GenericDomain, CaseIterable {
     var dtSeconds: Int {
         return 6 * 3600
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     var updateIntervalSeconds: Int {
         return 6 * 3600
@@ -34,8 +38,8 @@ enum GfsGraphCastDomain: String, GenericDomain, CaseIterable {
     /// Based on the current time , guess the current run that should be available soon on the open-data server
     var lastRun: Timestamp {
         let t = Timestamp.now()
-        // GraphCast has a delay of 15 hours hours after initialisation. Cronjobs starts at 15:20
-        return t.add(hours: -15).floor(toNearestHour: 6)
+        // GraphCast has a delay of 9-10 hours hours after initialisation. Cronjobs starts at 9:05
+        return t.add(hours: -9).floor(toNearestHour: 6)
     }
 
     func forecastHours(run: Int) -> [Int] {
@@ -52,7 +56,7 @@ enum GfsGraphCastDomain: String, GenericDomain, CaseIterable {
         return 60
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         return RegularGrid(nx: 1440, ny: 721, latMin: -90, lonMin: -180, dx: 0.25, dy: 0.25)
     }
 }

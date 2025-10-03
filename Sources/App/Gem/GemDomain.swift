@@ -101,7 +101,7 @@ enum GemDomain: String, GenericDomain, CaseIterable {
         case .gem_hrdps_continental:
             return Array(stride(from: 0, through: 48, by: 1))
         case .gem_global_ensemble:
-            let through = run.hour == 0 && run.weekday == .thursday ? 768 : 384
+            let through = run.hour == 0 && (run.weekday == .thursday || run.weekday == .monday) ? 936 : 384
             return Array(stride(from: 0, to: 192, by: 3)) + Array(stride(from: 192, through: through, by: 6))
         }
     }
@@ -119,7 +119,7 @@ enum GemDomain: String, GenericDomain, CaseIterable {
         }
     }
 
-    var ensembleMembers: Int {
+    var countEnsembleMember: Int {
         switch self {
         case .gem_global:
             return 1
@@ -161,7 +161,7 @@ enum GemDomain: String, GenericDomain, CaseIterable {
         }
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .gem_global:
             return RegularGrid(nx: 2400, ny: 1201, latMin: -90, lonMin: -180, dx: 0.15, dy: 0.15)

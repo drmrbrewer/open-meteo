@@ -1,7 +1,7 @@
 import Foundation
 import OmFileFormat
 
-enum ModelTimeVariable: String, GenericVariable {
+/*enum ModelTimeVariable: String, GenericVariable {
     case initialisation_time
     case modification_time
 
@@ -32,7 +32,7 @@ enum ModelTimeVariable: String, GenericVariable {
     var requiresOffsetCorrectionForMixing: Bool {
         return false
     }
-}
+}*/
 
 /**
  TODO:
@@ -85,7 +85,7 @@ struct ModelUpdateMetaJson: Codable {
             data_end_time: end.timeIntervalSince1970,
             update_interval_seconds: domain.updateIntervalSeconds
         )
-        let path = OmFileManagerReadable.meta(domain: domain.domainRegistry)
+        let path = ModelUpdateMetaFile(domain: domain.domainRegistry)
         try path.createDirectory()
         let pathString = path.getFilePath()
         try meta.writeTo(path: pathString)
@@ -104,49 +104,22 @@ struct ModelUpdateMetaJson: Codable {
     }
 }
 
-extension Encodable {
-    /// Write to as an atomic operation
-    func writeTo(path: String) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        let fn = try FileHandle.createNewFile(file: "\(path)~")
-        try fn.write(contentsOf: try encoder.encode(self))
-        try fn.close()
-        try FileManager.default.moveFileOverwrite(from: "\(path)~", to: path)
+struct ModelUpdateMetaFile: RemoteFileManageableJson {
+    typealias Value = ModelUpdateMetaJson
+    let domain: DomainRegistry
+    
+    func revalidateEverySeconds(modificationTime: Timestamp?, now: Timestamp) -> Int {
+        return 30
     }
-}
-
-/// Intermediate structure to keep meta files open
-struct ModelUpdateMetaJsonAndFileHandle: GenericFileManagable {
-    let fn: FileHandle
-    let meta: ModelUpdateMetaJson
-
-    func wasDeleted() -> Bool {
-        fn.wasDeleted()
+    
+    func getFilePath() -> String {
+        return "\(OpenMeteo.dataDirectory)\(domain.rawValue)/static/meta.json"
     }
-
-    static func open(from: OmFileManagerReadable) throws -> ModelUpdateMetaJsonAndFileHandle? {
-        guard let fn = try? FileHandle.openFileReading(file: from.getFilePath()) else {
+    
+    func getRemoteUrl() -> String? {
+        guard let directory = domain.remoteDataDirectory else {
             return nil
         }
-        guard let data = try fn.readToEnd() else {
-            return nil
-        }
-        guard let json = try? JSONDecoder().decode(ModelUpdateMetaJson.self, from: data) else {
-            return nil
-        }
-        return .init(fn: fn, meta: json)
-    }
-}
-
-/// Cache access to metadata JSONs
-struct MetaFileManager {
-    public static let instance = GenericFileManager<ModelUpdateMetaJsonAndFileHandle>()
-
-    private init() {}
-
-    /// Get cached file or return nil, if the files does not exist
-    public static func get(_ file: OmFileManagerReadable) throws -> ModelUpdateMetaJson? {
-        try instance.get(file)?.meta
+        return "\(directory)static/meta.json"
     }
 }

@@ -28,6 +28,10 @@ enum CamsDomain: String, GenericDomain, CaseIterable {
             return 14 * 24
         }
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     /// Cams has delay of 8 hours
     var lastRun: Timestamp {
@@ -100,7 +104,7 @@ enum CamsDomain: String, GenericDomain, CaseIterable {
         }
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .cams_global:
             return RegularGrid(nx: 900, ny: 451, latMin: -90, lonMin: -180, dx: 0.4, dy: 0.4)

@@ -9,7 +9,7 @@ import Foundation
 enum CmaDomain: String, GenericDomain, CaseIterable {
     case grapes_global
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .grapes_global:
             return RegularGrid(nx: 2880, ny: 1440, latMin: -89.9375, lonMin: -180, dx: 0.125, dy: 0.125)
@@ -21,6 +21,10 @@ enum CmaDomain: String, GenericDomain, CaseIterable {
         case .grapes_global:
             return .cma_grapes_global
         }
+    }
+    
+    var countEnsembleMember: Int {
+        return 1
     }
 
     var domainRegistryStatic: DomainRegistry? {
@@ -64,7 +68,7 @@ enum CmaDomain: String, GenericDomain, CaseIterable {
         switch self {
         case .grapes_global:
             // Delay of 4:20 hours after initialisation with 4 runs a day
-            return t.with(hour: ((t.hour - 4 + 24) % 24) / 6 * 6)
+            return t.subtract(hours: 4).floor(toNearestHour: 6)
         }
     }
 }

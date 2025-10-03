@@ -119,6 +119,10 @@ public struct Timestamp: Hashable, Sendable {
     public func toComponents() -> IsoDate {
         return IsoDate(timeIntervalSince1970: timeIntervalSince1970)
     }
+    
+    public func toIsoDateTime() -> IsoDateTime {
+        return IsoDateTime(timeIntervalSince1970: timeIntervalSince1970)
+    }
 
     public func subtract(days: Int = 0, hours: Int = 0, minutes: Int = 0, seconds: Int = 0) -> Timestamp {
         let dtSeconds = seconds + minutes * 60 + hours * 3600 + days * 86400
@@ -159,6 +163,10 @@ public struct Timestamp: Hashable, Sendable {
         let hour = Int(t.tm_hour)
         let minute = Int(t.tm_min)
         return "\(year)-\(month.zeroPadded(len: 2))-\(day.zeroPadded(len: 2))T\(hour.zeroPadded(len: 2)):\(minute.zeroPadded(len: 2))"
+    }
+    
+    var iso8601_YYYY_MM_dd_HH_mmZ: String {
+        return "\(iso8601_YYYY_MM_dd_HH_mm)Z"
     }
 
     /// With format `yyyy-MM-dd'T'HHmm'`
@@ -256,6 +264,17 @@ public struct Timestamp: Hashable, Sendable {
         let hour = Int(t.tm_hour)
         return "\(year)\(month.zeroPadded(len: 2))\(day.zeroPadded(len: 2))\(hour.zeroPadded(len: 2))\(minute.zeroPadded(len: 2))"
     }
+    
+    /// With format `MMddHH` for ECMWF ECPDS
+    var format_MMddHH: String {
+        var time = timeIntervalSince1970
+        var t = tm()
+        gmtime_r(&time, &t)
+        let month = Int(t.tm_mon + 1)
+        let day = Int(t.tm_mday)
+        let hour = Int(t.tm_hour)
+        return "\(month.zeroPadded(len: 2))\(day.zeroPadded(len: 2))\(hour.zeroPadded(len: 2))"
+    }
 
     // Return hour string as 2 character
     var hh: String {
@@ -276,6 +295,25 @@ public struct Timestamp: Hashable, Sendable {
     func with(year: Int? = nil, month: Int? = nil, day: Int? = nil) -> Timestamp {
         let date = toComponents()
         return Timestamp(year ?? date.year, month ?? date.month, day ?? date.day)
+    }
+    
+    func toDate() -> Date {
+        return Date(timeIntervalSince1970: TimeInterval(timeIntervalSince1970))
+    }
+    
+    /// Assuming a month has an average length, return the number of months from 1970 onwards
+    @inlinable public var monthIntervalSince1970Average: Int {
+        return Int(round(Float(timeIntervalSince1970) / Float.dtSecondsMonthlyAverage))
+    }
+    
+    func toYearMonth() -> YearMonth {
+        return YearMonth(timestamp: self)
+    }
+}
+
+extension Date {
+    func toTimestamp() -> Timestamp {
+        return Timestamp(Int(self.timeIntervalSince1970))
     }
 }
 
@@ -349,6 +387,9 @@ public struct TimerangeDt: Hashable, Sendable {
     public let dtSeconds: Int
 
     @inlinable public var count: Int {
+        if dtSeconds == .dtSecondsMonthly {
+            return range.upperBound.monthIntervalSince1970Average - range.lowerBound.monthIntervalSince1970Average
+        }
         return (range.upperBound.timeIntervalSince1970 - range.lowerBound.timeIntervalSince1970) / dtSeconds
     }
 
@@ -372,13 +413,22 @@ public struct TimerangeDt: Hashable, Sendable {
         self.dtSeconds = dtSeconds
     }
 
-    /// devide time by dtSeconds
+    /// divide time by dtSeconds
     @inlinable public func toIndexTime() -> Range<Int> {
+        if dtSeconds == .dtSecondsMonthly {
+            // Round to get the closest month index
+            return range.lowerBound.monthIntervalSince1970Average ..< range.upperBound.monthIntervalSince1970Average
+        }
         return range.lowerBound.timeIntervalSince1970 / dtSeconds ..< range.upperBound.timeIntervalSince1970 / dtSeconds
     }
 
     @inlinable public func index(of: Timestamp) -> Int? {
-        let index = (of.timeIntervalSince1970 - range.lowerBound.timeIntervalSince1970) / dtSeconds
+        let index: Int
+        if dtSeconds == .dtSecondsMonthly {
+            index = of.monthIntervalSince1970Average - range.lowerBound.monthIntervalSince1970Average
+        } else {
+            index = (of.timeIntervalSince1970 - range.lowerBound.timeIntervalSince1970) / dtSeconds
+        }
         return index < 0 || index >= count ? nil : index
     }
 
@@ -412,9 +462,45 @@ public struct TimerangeDt: Hashable, Sendable {
     }
 }
 
+extension Int {
+    /// dtSeconds in a month with 31 days
+    public static var dtSecondsMonthly: Int {
+        return 31 * 24 * 60 * 60
+    }
+}
+
+extension Float {
+    /// Average dt seconds in a month. Used to analytically get the month index
+    public static var dtSecondsMonthlyAverage: Float {
+        return 365.25 * 24 * 3600 / 12
+    }
+}
+
 extension TimerangeDt: Sequence {
-    public func makeIterator() -> StrideToIterator<Timestamp> {
-        range.stride(dtSeconds: dtSeconds).makeIterator()
+    public func makeIterator() -> AnyIterator<Timestamp> {
+        if dtSeconds == .dtSecondsMonthly {
+            let range = range.toYearMonth()
+            var timestamp = range.lowerBound
+            return AnyIterator<Timestamp> { () -> (Timestamp)? in
+                if timestamp >= range.upperBound {
+                    return nil
+                }
+                defer {
+                    timestamp = timestamp.advanced(by: 1)
+                }
+                return timestamp.timestamp
+            }
+        }
+        var timestamp = range.lowerBound
+        return AnyIterator<Timestamp> { () -> (Timestamp)? in
+            if timestamp >= range.upperBound {
+                return nil
+            }
+            defer {
+                timestamp = timestamp.add(dtSeconds)
+            }
+            return timestamp
+        }
     }
 }
 

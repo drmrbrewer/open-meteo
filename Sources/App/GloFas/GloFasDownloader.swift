@@ -87,7 +87,7 @@ struct GloFasDownloader: AsyncCommand {
         try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
 
         let downloadTimeHours: Double = domain.isForecast ? 5 : 14
-        let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: downloadTimeHours, readTimeout: Int(3600 * downloadTimeHours))
+        let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: downloadTimeHours, readTimeout: Int(3600 * downloadTimeHours), retryUnauthorized: true)
         let directory = domain.isForecast ? "fc_grib" : "seasonal_fc_grib"
         let nMembers = domain.isForecast ? 1 : 51
         let handles = try await (0..<nMembers).asyncFlatMap { member -> [GenericVariableHandle] in
@@ -107,7 +107,7 @@ struct GloFasDownloader: AsyncCommand {
                     let writer = OmFileSplitter.makeSpatialWriter(domain: domain)
                     let fn = try writer.writeTemporary(compressionType: .pfor_delta2d_int16_logarithmic, scalefactor: 1000, all: grib2d.array.data)
                     let variable = GloFasVariableAndMember(member: member)
-                    return GenericVariableHandle(variable: variable, time: attributes.timestamp, member: 0, fn: fn)
+                    return try await GenericVariableHandle(variable: variable, time: attributes.timestamp, member: 0, fn: fn, domain: domain)
                 }.collect().compactMap({ $0 })
             }
         }
@@ -138,19 +138,19 @@ struct GloFasDownloader: AsyncCommand {
         let nx = domain.grid.nx
 
         let months = timeinterval.toYearMonth()
+        let server = "https://ewds.climate.copernicus.eu/api"
 
         /// download multiple months at once
         if months.count >= 2 {
             let year = months.lowerBound.year
             let months = months.lowerBound.month ... months.upperBound.advanced(by: -1).month
-            let monthNames = ["", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
 
             logger.info("Downloading year \(year) months \(months)")
             let query = GlofasQuery(
                 system_version: domain.version,
                 hyear: "\(year)",
-                hmonth: Array(monthNames[months]),
-                hday: (0...31).map { $0.zeroPadded(len: 2) },
+                hmonth: months.map({$0.zeroPadded(len: 2)}),
+                hday: (1...31).map { $0.zeroPadded(len: 2) },
                 product_type: domain.productType
             )
             let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: 24)
@@ -158,6 +158,7 @@ struct GloFasDownloader: AsyncCommand {
                 dataset: "cems-glofas-historical",
                 query: query,
                 apikey: cdskey,
+                server: server,
                 destinationFile: gribFile
             )
             try convertGribFileToDaily(logger: logger, domain: domain, gribFile: gribFile)
@@ -185,6 +186,7 @@ struct GloFasDownloader: AsyncCommand {
                     dataset: "cems-glofas-historical",
                     query: query,
                     apikey: cdskey,
+                    server: server,
                     destinationFile: gribFile
                 )
                 try convertGribFileToDaily(logger: logger, domain: domain, gribFile: gribFile)
@@ -265,6 +267,15 @@ enum GloFasDomain: String, GenericDomain, CaseIterable {
             return .glofas_intermediate_v3
         }
     }
+    
+    var countEnsembleMember: Int {
+        switch self {
+        case .forecast, .forecastv3, .seasonal, .seasonalv3:
+            return 51
+        case .consolidated, .intermediate, .consolidatedv3, .intermediatev3:
+            return 1
+        }
+    }
 
     var domainRegistryStatic: DomainRegistry? {
         return nil
@@ -283,10 +294,10 @@ enum GloFasDomain: String, GenericDomain, CaseIterable {
         return nil
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .consolidated, .intermediate, .seasonal, .forecast:
-            return RegularGrid(nx: 7200, ny: 3000, latMin: -60, lonMin: -180, dx: 0.05, dy: 0.05)
+            return RegularGrid(nx: 7200, ny: 3000, latMin: -59.975, lonMin: -180.025, dx: 0.05, dy: 0.05)
         case .consolidatedv3, .intermediatev3, .seasonalv3, .forecastv3:
             return RegularGrid(nx: 3600, ny: 1500, latMin: -60, lonMin: -180, dx: 0.1, dy: 0.1)
         }
@@ -348,15 +359,15 @@ enum GloFasDomain: String, GenericDomain, CaseIterable {
     var updateIntervalSeconds: Int {
         switch self {
         case .forecast:
-            return 12 * 3600
+            return 24 * 3600
         case .consolidated:
             return 0
         case .seasonal:
-            return 12 * 3600
+            return 31 * 24 * 3600
         case .intermediate:
             return 0
         case .forecastv3:
-            return 12 * 3600
+            return 24 * 3600
         case .consolidatedv3:
             return 0
         case .seasonalv3:

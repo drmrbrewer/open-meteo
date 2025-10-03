@@ -5,12 +5,13 @@ public protocol Gridable: Sendable {
     var nx: Int { get }
     var ny: Int { get }
 
-    /// Typically `1` to seach in a `3x3` grid. Use `2` for `5x5`. E.g. MF Wave has large boarders around the coast
+    /// Typically `1` to search in a `3x3` grid. Use `2` for `5x5`. E.g. MF Wave has large boarders around the coast
     var searchRadius: Int { get }
 
     func findPoint(lat: Float, lon: Float) -> Int?
     func findPointInterpolated(lat: Float, lon: Float) -> GridPoint2DFraction?
-    func findBox(boundingBox bb: BoundingBoxWGS84) -> (any Sequence<Int>)?
+    associatedtype SliceType: Sequence<Int>
+    func findBox(boundingBox bb: BoundingBoxWGS84) -> SliceType?
     func getCoordinates(gridpoint: Int) -> (latitude: Float, longitude: Float)
 }
 
@@ -86,8 +87,12 @@ extension Gridable {
             return .noData
         }
         if elevation <= -999 {
-            // sea gtid point
+            // sea grid point
             return .sea
+        }
+        if elevation >= 9999 {
+            // land, but no data
+            return .noData
         }
         return .elevation(elevation)
     }
@@ -100,8 +105,12 @@ extension Gridable {
         }
         // Due to interpolation, -999 is not clearly sea
         if elevation <= -50 {
-            // sea gtid point
+            // sea grid point
             return .sea
+        }
+        if elevation >= 9000 {
+            // land, but no data
+            return .noData
         }
         return .elevation(elevation)
     }
@@ -166,6 +175,12 @@ extension Gridable {
         return (center, .elevation(elevationSurrounding[elevationSurrounding.count / 2]))
     }
 
+    /// Return distance squared of a coordinate to a grid point
+    fileprivate func distanceSquared(x: Int, y: Int, lat: Float, lon: Float) -> Float {
+        let coordinate = getCoordinates(gridpoint: y * nx + x)
+        return pow(coordinate.latitude - lat, 2) + pow(coordinate.longitude - lon, 2)
+    }
+
     /// Analyse 3x3 locations around the desired coordinate and return the best elevation match
     func findPointTerrainOptimised(lat: Float, lon: Float, elevation: Float, elevationFile: any OmFileReaderArrayProtocol<Float>) async throws -> (gridpoint: Int, gridElevation: ElevationOrSea)? {
         guard let center = findPoint(lat: lat, lon: lon) else {
@@ -180,18 +195,27 @@ extension Gridable {
         /// -999 marks sea points, therefore  elevation matching will naturally avoid those
         let elevationSurrounding = try await elevationFile.read(range: [yrange.toUInt64(), xrange.toUInt64()])
 
-        if abs(elevationSurrounding[elevationSurrounding.count / 2] - elevation ) <= 100 {
+        let deltaCenter = abs(elevationSurrounding[elevationSurrounding.count / 2] - elevation )
+        if deltaCenter <= 100 {
             return (center, .elevation(elevationSurrounding[elevationSurrounding.count / 2]))
         }
 
-        var minDelta = Float(10_000)
+        var minDelta = deltaCenter
         var minPos = elevationSurrounding.count / 2
         for i in elevationSurrounding.indices {
-            if elevationSurrounding[i].isNaN {
+            if elevationSurrounding[i].isNaN || elevationSurrounding[i] <= -999 {
                 continue
             }
-            if abs(elevationSurrounding[i] - elevation) < minDelta {
-                minDelta = abs(elevationSurrounding[i] - elevation)
+            /// 9999 is used in satellite datasets to mark land locations, use closest grid-cell, regardless of terrain elevation
+            /// Ideally we store elevation and sea mark separately, but this would require large refactoring
+            let delta = elevationSurrounding[i] >= 9999 ? distanceSquared(
+                x: xrange.lowerBound + i % xrange.count,
+                y: yrange.lowerBound + i / xrange.count,
+                lat: lat,
+                lon: lon
+            ) : abs(elevationSurrounding[i] - elevation)
+            if delta < minDelta {
+                minDelta = delta
                 minPos = i
             }
         }
@@ -209,6 +233,10 @@ extension Gridable {
         }
         if elevationSurrounding[minPos] <= -999 {
             return (gridpoint, .sea)
+        }
+        if elevationSurrounding[minPos] >= 9999 {
+            /// 9999 marks land points in satellite datasets
+            return (gridpoint, .noData)
         }
         return (gridpoint, .elevation(elevationSurrounding[minPos]))
     }

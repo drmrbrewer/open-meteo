@@ -221,7 +221,7 @@ enum Cmip6Domain: String, RawRepresentableString, CaseIterable, GenericDomain {
         return self == .CMCC_CM2_VHR4 || self == .FGOALS_f3_H /*|| self == .FGOALS_f3_H_highresSST*/
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .CMCC_CM2_VHR4:
             return RegularGrid(nx: 1152, ny: 768, latMin: -90, lonMin: -180, dx: 0.3125, dy: 180 / 768)
@@ -270,16 +270,20 @@ enum Cmip6Domain: String, RawRepresentableString, CaseIterable, GenericDomain {
     var updateIntervalSeconds: Int {
         return 0
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 }
 
 extension GenericDomain {
     /// Get the file path to a linear bias seasonal file for a given variable
-    func getBiasCorrectionFile(for variable: String) -> OmFileManagerReadable {
+    func getBiasCorrectionFile(for variable: String) -> OmFileType {
         return .domainChunk(domain: domainRegistry, variable: variable, type: .linear_bias_seasonal, chunk: nil, ensembleMember: 0, previousDay: 0)
     }
 
     func openBiasCorrectionFile(for variable: String, client: HTTPClient, logger: Logger) async throws -> (any OmFileReaderArrayProtocol<Float>)? {
-        return try await RemoteOmFileManager.instance.get(file: getBiasCorrectionFile(for: variable), client: client, logger: logger)
+        return try await RemoteFileManager.instance.get(file: getBiasCorrectionFile(for: variable), client: client, logger: logger)?.reader
     }
 }
 

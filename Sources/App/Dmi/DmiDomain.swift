@@ -7,7 +7,7 @@ import Foundation
 enum DmiDomain: String, GenericDomain, CaseIterable {
     case harmonie_arome_europe
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .harmonie_arome_europe:
             /*
@@ -34,6 +34,10 @@ enum DmiDomain: String, GenericDomain, CaseIterable {
                 projection: LambertConformalConicProjection(λ0: 352, ϕ0: 55.5, ϕ1: 55.5, ϕ2: 55.5, radius: 6371229)
             )
         }
+    }
+    
+    var countEnsembleMember: Int {
+        return 1
     }
 
     var domainRegistry: DomainRegistry {

@@ -56,7 +56,7 @@ struct SatelliteDownloadCommand: AsyncCommand {
             fatalError("no master file defined")
         }
         let masterTime = TimerangeDt(range: master, dtSeconds: domain.dtSeconds)
-        let masterFile = OmFileManagerReadable.domainChunk(domain: domain.domainRegistry, variable: "precipitation_sum", type: .master, chunk: 0, ensembleMember: 0, previousDay: 0)
+        let masterFile = OmFileType.domainChunk(domain: domain.domainRegistry, variable: "precipitation_sum", type: .master, chunk: 0, ensembleMember: 0, previousDay: 0)
         if !FileManager.default.fileExists(atPath: masterFile.getFilePath()) {
             try downloadImergDaily(logger: logger, domain: .imerg_daily, timerange: masterTime)
             
@@ -200,6 +200,10 @@ enum SatelliteDomain: String, CaseIterable, GenericDomain {
             return 3600 * 24
         }
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     var domainRegistry: DomainRegistry {
         switch self {
@@ -236,7 +240,7 @@ enum SatelliteDomain: String, CaseIterable, GenericDomain {
         return 24 * 21
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .imerg_daily:
             return RegularGrid(nx: 3600, ny: 1800, latMin: -89.95, lonMin: -179.95, dx: 0.1, dy: 0.1)

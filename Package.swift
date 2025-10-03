@@ -29,13 +29,14 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/vapor/vapor.git", from: "4.89.0"),
         .package(url: "https://github.com/google/flatbuffers.git", from: "25.2.10"),
-        .package(url: "https://github.com/open-meteo/sdk.git", from: "1.20.0"),
-        .package(url: "https://github.com/open-meteo/om-file-format.git", revision: "01b48bf682c50e736749569cc2320298a08e80a9"), // Because unsafe C flags are set, tagged releases cannot be used
+        .package(url: "https://github.com/apple/swift-numerics", from: "1.0.0"),
+        .package(url: "https://github.com/open-meteo/sdk.git", from: "1.21.2"),
+        .package(url: "https://github.com/open-meteo/om-file-format.git", revision: "6631ab874603b8a36da8c6ce6372b31b1b98c32a"), // Because unsafe C flags are set, tagged releases cannot be used
         // .package(path: "../openmeteo-sdk-fork"),  // local forked version
         //.package(url: "https://github.com/open-meteo/sdk.git", branch: "add_ecmwf_long_window"),
         .package(url: "https://github.com/patrick-zippenfenig/curl-swift.git", from: "1.0.1"),
         //.package(url: "/Users/patrick/Documents/curl-swift", branch: "main"),
-        .package(url: "https://github.com/patrick-zippenfenig/SwiftNetCDF.git", from: "1.1.7"),
+        .package(url: "https://github.com/patrick-zippenfenig/SwiftNetCDF.git", from: "1.2.0"),
         .package(url: "https://github.com/patrick-zippenfenig/SwiftTimeZoneLookup.git", from: "1.0.7"),
         .package(url: "https://github.com/patrick-zippenfenig/SwiftEccodes.git", from: "1.0.1"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.68.0")
@@ -88,7 +89,11 @@ let package = Package(
         ),
         .testTarget(
             name: "AppTests",
-            dependencies: [.target(name: "App")]
+            dependencies: [
+                .target(name: "App"),
+                .product(name: "Numerics", package: "swift-numerics"),
+                .product(name: "VaporTesting", package: "vapor")
+            ]
         ),
     ]
 )

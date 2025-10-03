@@ -86,7 +86,7 @@ struct GemDownload: AsyncCommand {
         logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
 
         try await downloadElevation(application: context.application, domain: domain, run: run, server: signature.server, createNetcdf: signature.createNetcdf)
-        let handles = try await download(application: context.application, domain: domain, variables: variables, run: run, server: signature.server)
+        let handles = try await download(application: context.application, domain: domain, variables: variables, run: run, server: signature.server, uploadS3Bucket: signature.uploadS3Bucket)
         try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: signature.uploadS3OnlyProbabilities)
         logger.info("Finished in \(start.timeElapsedPretty())")
     }
@@ -138,22 +138,20 @@ struct GemDownload: AsyncCommand {
     }
 
     /// Download data and store as compressed files for each timestep
-    func download(application: Application, domain: GemDomain, variables: [any GemVariableDownloadable], run: Timestamp, server: String?) async throws -> [GenericVariableHandle] {
+    func download(application: Application, domain: GemDomain, variables: [any GemVariableDownloadable], run: Timestamp, server: String?, uploadS3Bucket: String?) async throws -> [GenericVariableHandle] {
         let logger = application.logger
         let deadLineHours = (domain == .gem_global_ensemble || domain == .gem_global) ? 11 : 5.0
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours) // 12 hours and 6 hours interval so we let 1 hour for data conversion
-        let writer = OmRunSpatialWriter(domain: domain, run: run, storeOnDisk: [GemDomain.gem_global, .gem_hrdps_continental, .gem_regional].contains(domain))
-
+        let isEnsemble = domain.countEnsembleMember > 1
+        
         var grib2d = GribArray2D(nx: domain.grid.nx, ny: domain.grid.ny)
-        var handles = [GenericVariableHandle]()
 
         /// Keep values from previous timestep. Actori isolated, because of concurrent data conversion
         let deaverager = GribDeaverager()
 
-        let forecastHours = domain.getForecastHours(run: run)
-        var previousHour = 0
-        for hour in forecastHours {
-            let timestamp = run.add(hours: hour)
+        let timestamps = domain.getForecastHours(run: run).map { run.add(hours: $0) }
+        let handles = try await timestamps.enumerated().asyncFlatMap { (i,timestamp) -> [GenericVariableHandle] in
+            let hour = (timestamp.timeIntervalSince1970 - run.timeIntervalSince1970) / 3600
             logger.info("Downloading hour \(hour)")
             struct GemSurfaceVariableMember: Hashable {
                 let variable: GemSurfaceVariable
@@ -165,7 +163,10 @@ struct GemDownload: AsyncCommand {
                 }
             }
             /// Keep wind vectors in memory to calculate wind speed / direction for ensemble
+            ///
             var inMemory = [GemSurfaceVariableMember: [Float]]()
+            let writer = OmSpatialTimestepWriter(domain: domain, run: run, time: timestamp, storeOnDisk: !isEnsemble, realm: nil)
+            let writerProbabilities = isEnsemble ? OmSpatialTimestepWriter(domain: domain, run: run, time: timestamp, storeOnDisk: true, realm: nil) : nil
 
             for variable in variables {
                 guard let gribName = variable.gribName(domain: domain) else {
@@ -226,32 +227,30 @@ struct GemDownload: AsyncCommand {
                                     fatalError("Wind speed calculation requires \(windspeedVariable) to download")
                                 }
                                 let windspeed = zip(u, grib2d.array.data).map(Meteorology.windspeed)
-                                handles.append(try writer.write(time: timestamp, member: member, variable: windspeedVariable, data: windspeed))
+                                try await writer.write(member: member, variable: windspeedVariable, data: windspeed)
                                 grib2d.array.data = Meteorology.windirectionFast(u: u, v: grib2d.array.data)
                             }
                         }
-                        handles.append(try writer.write(time: timestamp, member: member, variable: variable, data: grib2d.array.data))
+                        try await writer.write(member: member, variable: variable, data: grib2d.array.data)
                     }
                 } catch {
                     if !isSnowfallWaterEq {
                         throw error
                     }
                 }
-
-                if domain == .gem_global_ensemble && variable as? GemSurfaceVariable == GemSurfaceVariable.precipitation {
+                if let writerProbabilities, variable as? GemSurfaceVariable == GemSurfaceVariable.precipitation {
                     logger.info("Calculating precipitation probability")
-                    if let handle = try await storePrecipitation.calculatePrecipitationProbability(
+                    let previousHour = (timestamps[max(0, i-1)].timeIntervalSince1970 - run.timeIntervalSince1970) / 3600
+                    try await storePrecipitation.calculatePrecipitationProbability(
                         precipitationVariable: .precipitation,
-                        domain: domain,
-                        timestamp: timestamp,
-                        run: run,
-                        dtHoursOfCurrentStep: hour - previousHour
-                    ) {
-                        handles.append(handle)
-                    }
+                        dtHoursOfCurrentStep: hour - previousHour,
+                        writer: writerProbabilities
+                    )
                 }
             }
-            previousHour = hour
+            let completed = i == timestamps.count - 1
+            let handles = try await writer.finalise(completed: completed, validTimes: Array(timestamps[0...i]), uploadS3Bucket: uploadS3Bucket) + (writerProbabilities?.finalise(completed: completed, validTimes: Array(timestamps[0...i]), uploadS3Bucket: uploadS3Bucket) ?? [])
+            return handles
         }
         await curl.printStatistics()
         return handles

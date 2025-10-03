@@ -47,8 +47,8 @@ struct UkmoDownload: AsyncCommand {
         @Flag(name: "skip-missing", help: "Ignore missing files while downloading")
         var skipMissing: Bool
 
-        // @Flag(name: "fix-solar", help: "Fix old solar files")
-        // var fixSolar: Bool
+        @Flag(name: "upload-s3-only-probabilities", help: "Only upload probabilities files to S3")
+        var uploadS3OnlyProbabilities: Bool
     }
 
     var help: String {
@@ -102,7 +102,7 @@ struct UkmoDownload: AsyncCommand {
         try await downloadElevation(application: context.application, domain: domain, run: run, server: signature.server, createNetcdf: signature.createNetcdf)
         let handles = try await download(application: context.application, domain: domain, variables: variables, run: run, concurrent: nConcurrent, maxForecastHour: signature.maxForecastHour, server: signature.server, skipMissing: signature.skipMissing, uploadS3Bucket: signature.uploadS3Bucket)
 
-        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
+        try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: signature.uploadS3OnlyProbabilities)
         logger.info("Finished in \(start.timeElapsedPretty())")
     }
 
@@ -115,7 +115,7 @@ struct UkmoDownload: AsyncCommand {
             for timeChunk in indexTime.divideRoundedUp(divisor: nTimePerFile) {
                 for previousDay in 1..<10 { // 0..<10}
                     let fileTime = TimerangeDt(start: Timestamp(timeChunk * nTimePerFile * domain.dtSeconds), nTime: nTimePerFile, dtSeconds: domain.dtSeconds)
-                    let readFile = OmFileManagerReadable.domainChunk(domain: domain.domainRegistry, variable: variable.omFileName.file, type: .chunk, chunk: timeChunk, ensembleMember: 0, previousDay: previousDay)
+                    let readFile = OmFileType.domainChunk(domain: domain.domainRegistry, variable: variable.omFileName.file, type: .chunk, chunk: timeChunk, ensembleMember: 0, previousDay: previousDay)
                     guard let omRead = try readFile.openRead() else {
                         continue
                     }
@@ -236,14 +236,13 @@ struct UkmoDownload: AsyncCommand {
         let deadLineHours: Double
         switch domain {
         case .global_deterministic_10km, .global_ensemble_20km:
-            deadLineHours = 6
+            deadLineHours = 8
         case .uk_deterministic_2km, .uk_ensemble_2km:
-            deadLineHours = 2.5
+            deadLineHours = 3.5
         }
         Process.alarm(seconds: Int(deadLineHours + 0.1) * 3600)
         defer { Process.alarm(seconds: 0) }
-
-        let writer = OmRunSpatialWriter(domain: domain, run: run, storeOnDisk: domain == .uk_deterministic_2km || domain == .global_deterministic_10km)
+        let isEnsemble = domain.countEnsembleMember > 1
 
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient, deadLineHours: deadLineHours, retryError4xx: !skipMissing)
 
@@ -251,61 +250,56 @@ struct UkmoDownload: AsyncCommand {
         let timeStr = (domain == .global_ensemble_20km || domain == .uk_ensemble_2km) ? "\(run.format_directoriesYYYYMMdd)/T\(run.hh)00" : run.iso8601_YYYYMMddTHHmm
         let baseUrl = "\(server)\(domain.modelNameOnS3)/\(timeStr)Z/"
 
-        var handles = [GenericVariableHandle]()
-        for timestamp in domain.forecastSteps(run: run) {
+        let timestamps = domain.forecastSteps(run: run)
+        let handles: [GenericVariableHandle] = try await timestamps.enumerated().asyncFlatMap { (i,timestamp) -> [GenericVariableHandle] in
             logger.info("Process timestamp \(timestamp.iso8601_YYYY_MM_dd_HH_mm)")
             let forecastHour = (timestamp.timeIntervalSince1970 - run.timeIntervalSince1970) / 3600
             if let maxForecastHour, forecastHour > maxForecastHour {
-                break
+                return []
             }
-            do {
-                let handle = try await variables.mapConcurrent(nConcurrent: concurrent) { variable -> [GenericVariableHandle] in
-                    if variable.skipHour0, timestamp == run {
-                        return []
-                    }
-                    guard let fileName = variable.getNcFileName(domain: domain, forecastHour: forecastHour, run: run) else {
-                        return []
-                    }
+            let writer = OmSpatialTimestepWriter(domain: domain, run: run, time: timestamp, storeOnDisk: !isEnsemble, realm: nil)
+            try await variables.foreachConcurrent(nConcurrent: concurrent) { variable in
+                if variable.skipHour0, timestamp == run {
+                    return
+                }
+                guard let fileName = variable.getNcFileName(domain: domain, forecastHour: forecastHour, run: run) else {
+                    return
+                }
 
-                    let url = "\(baseUrl)\(timestamp.iso8601_YYYYMMddTHHmm)Z-PT\(forecastHour.zeroPadded(len: 4))H\(timestamp.minute.zeroPadded(len: 2))M-\(fileName).nc"
-                    let memory = try await curl.downloadInMemoryAsync(url: url, minSize: 1024)
-                    let data = try memory.readUkmoNetCDF()
-                    logger.info("Processing \(data.name) [\(data.unit)]")
-                    return try data.data.compactMap { level, member, data -> GenericVariableHandle? in
-                        var data = data.data
-                        if let scaling = variable.multiplyAdd {
-                            data.multiplyAdd(multiply: scaling.scalefactor, add: scaling.offset)
-                        }
-                        if let variable = variable as? UkmoSurfaceVariable {
-                            if variable == .cloud_base {
-                                for i in data.indices {
-                                    if data[i].isNaN {
-                                        data[i] = 0
-                                    }
-                                }
-                            }
-                            /// UKMO provides solar radiation as instant values. Convert to backwards averaged data.
-                            if variable == .direct_radiation || variable == .shortwave_radiation {
-                                let factor = Zensun.backwardsAveragedToInstantFactor(grid: domain.grid, locationRange: 0..<domain.grid.count, timerange: TimerangeDt(start: timestamp, nTime: 1, dtSeconds: domain.dtSeconds))
-                                for i in data.indices {
-                                    if factor.data[i] < 0.05 {
-                                        continue
-                                    }
-                                    data[i] /= factor.data[i]
-                                }
-                            }
-                        }
-                        let variable = variable.withLevel(level: level)
-                        return try writer.write(time: timestamp, member: member, variable: variable, data: data)
+                let url = "\(baseUrl)\(timestamp.iso8601_YYYYMMddTHHmm)Z-PT\(forecastHour.zeroPadded(len: 4))H\(timestamp.minute.zeroPadded(len: 2))M-\(fileName).nc"
+                let memory = try await curl.downloadInMemoryAsync(url: url, minSize: 1024)
+                let data = try memory.readUkmoNetCDF()
+                logger.info("Processing \(data.name) [\(data.unit)]")
+                for (level, member, data) in data.data {
+                    var data = data.data
+                    if let scaling = variable.multiplyAdd {
+                        data.multiplyAdd(multiply: scaling.scalefactor, add: scaling.offset)
                     }
-                }.flatMap({ $0 })
-                handles.append(contentsOf: handle)
-            } catch UkmoDownloadError.is12HoursShortRun {
-                break
+                    if let variable = variable as? UkmoSurfaceVariable {
+                        if variable == .cloud_base {
+                            for i in data.indices {
+                                if data[i].isNaN {
+                                    data[i] = 0
+                                }
+                            }
+                        }
+                        /// UKMO provides solar radiation as instant values. Convert to backwards averaged data.
+                        if variable == .direct_radiation || variable == .shortwave_radiation {
+                            let factor = Zensun.backwardsAveragedToInstantFactor(grid: domain.grid, locationRange: 0..<domain.grid.count, timerange: TimerangeDt(start: timestamp, nTime: 1, dtSeconds: domain.dtSeconds))
+                            for i in data.indices {
+                                if factor.data[i] < 0.05 {
+                                    continue
+                                }
+                                data[i] /= factor.data[i]
+                            }
+                        }
+                    }
+                    let variable = variable.withLevel(level: level)
+                    try await writer.write(member: member, variable: variable, data: data)
+                }
             }
-            if let uploadS3Bucket {
-                try domain.domainRegistry.syncToS3Spatial(bucket: uploadS3Bucket, timesteps: [timestamp])
-            }
+            let completed = i == timestamps.count - 1
+            return try await writer.finalise(completed: completed, validTimes: Array(timestamps[0...i]), uploadS3Bucket: uploadS3Bucket)
         }
         await curl.printStatistics()
         return handles

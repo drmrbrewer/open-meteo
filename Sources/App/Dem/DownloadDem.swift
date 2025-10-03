@@ -12,7 +12,7 @@ import OmFileFormat
  Total size after conversion `10.48 GB`
  */
 struct Dem90: GenericDomain {
-    var grid: Gridable {
+    var grid: any Gridable {
         fatalError("Dem90 does not offer a grid")
     }
 
@@ -39,6 +39,10 @@ struct Dem90: GenericDomain {
     var omFileLength: Int {
         return 0
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     var updateIntervalSeconds: Int {
         return 0
@@ -55,8 +59,8 @@ struct Dem90: GenericDomain {
         let lonrow = UInt64((lon + 180) * Float(px))
         var value: Float = .nan
         
-        let file = OmFileManagerReadable.staticFile(domain: .copernicus_dem90, variable: "lat", chunk: lati)
-        try await RemoteOmFileManager.instance.with(file: file, client: httpClient, logger: logger) { reader in
+        let file = OmFileType.staticFile(domain: .copernicus_dem90, variable: "lat", chunk: lati)
+        try await RemoteFileManager.instance.with(file: file, client: httpClient, logger: logger) { (reader, _) in
             try await reader.read(into: &value, range: [latrow..<latrow + 1, lonrow..<lonrow + 1], intoCubeOffset: nil, intoCubeDimension: nil)
         }
         return value
@@ -186,7 +190,7 @@ struct DownloadDemCommand: AsyncCommand {
             var scheduledCompressions = 0
 
             for lat in -90..<90 {
-                let file = OmFileManagerReadable.staticFile(domain: .copernicus_dem90, variable: "lat", chunk: lat)
+                let file = OmFileType.staticFile(domain: .copernicus_dem90, variable: "lat", chunk: lat)
                 if FileManager.default.fileExists(atPath: file.getFilePath()) {
                     continue
                 }
@@ -208,9 +212,7 @@ struct DownloadDemCommand: AsyncCommand {
                             continue
                         }
 
-                        guard let om = try await OmFileReader(file: omFile).asArray(of: Float.self) else {
-                            fatalError("not a float array")
-                        }
+                        let om = try await OmFileReader(file: omFile).expectArray(of: Float.self)
                         let dimensions = om.getDimensions()
                         precondition(dimensions[0] == 1200)
                         precondition(dimensions[1] == px)

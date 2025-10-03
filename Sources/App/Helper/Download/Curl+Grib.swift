@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import SwiftEccodes
 import CHelper
 
+
 extension Curl {
     /// Download all grib files and return an array of grib messages
     func downloadGrib(url: String, bzip2Decode: Bool, range: String? = nil, minSize: Int? = nil, nConcurrent: Int = 1, deadLineHours: Double? = nil, headers: [(String, String)] = []) async throws -> [GribMessage] {
@@ -26,15 +27,16 @@ extension Curl {
             do {
                 var messages = [GribMessage]()
                 let contentLength = try response.contentLength()
+                let checksum = response.headers["x-amz-meta-sha256"].first
                 let tracker = TransferAmountTrackerActor(logger: logger, totalSize: contentLength)
                 if bzip2Decode {
-                    for try await m in response.body.tracker(tracker).decompressBzip2().decodeGrib() {
+                    for try await m in response.body.tracker(tracker).sha256verify(checksum).decompressBzip2().decodeGrib() {
                         try Task.checkCancellation()
                         messages.append(m)
                         chelper_malloc_trim()
                     }
                 } else {
-                    for try await m in response.body.tracker(tracker).decodeGrib() {
+                    for try await m in response.body.tracker(tracker).sha256verify(checksum).decodeGrib() {
                         try Task.checkCancellation()
                         messages.append(m)
                         chelper_malloc_trim()
@@ -51,6 +53,13 @@ extension Curl {
                 try await timeout.check(error: error, delay: nil)
             }
         }
+    }
+    
+    /// Stream GRIB messages. Does not restart stream on error
+    func getGribStream(url: String, bzip2Decode: Bool, range: String? = nil, minSize: Int? = nil, nConcurrent: Int = 1, deadLineHours: Double? = nil, headers: [(String, String)] = []) async throws -> AnyAsyncSequence<GribMessage> {
+        return try await self.withGribStream(url: url, bzip2Decode: bzip2Decode, nConcurrent: nConcurrent, deadLineHours: deadLineHours, headers: headers) {
+            return $0
+        }.eraseToAnyAsyncSequence()
     }
 
     /// Stream GRIB messages. The grib stream might be restarted on error.
@@ -145,11 +154,11 @@ struct GribArray2D {
             fatalError("Could not get gridType")
         }
         if gridType == "reduced_gg" {
-            guard let numberOfCodedValues = message.get(attribute: "numberOfCodedValues")?.toInt() else {
-                fatalError("Could not get numberOfCodedValues")
+            guard let numberOfDataPoints = message.get(attribute: "numberOfDataPoints")?.toInt() else {
+                fatalError("Could not get numberOfDataPoints")
             }
-            guard numberOfCodedValues == array.count else {
-                fatalError("GRIB dimensions (count=\(numberOfCodedValues)) do not match domain grid dimensions (nx=\(array.nx), ny=\(array.ny))")
+            guard numberOfDataPoints == array.count else {
+                fatalError("GRIB dimensions (count=\(numberOfDataPoints)) do not match domain grid dimensions (nx=\(array.nx), ny=\(array.ny))")
             }
         } else {
             guard let nx = message.get(attribute: "Nx")?.toInt() else {

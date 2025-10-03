@@ -1,4 +1,4 @@
-import Foundation
+/*import Foundation
 import FlatBuffers
 import OpenMeteoSdk
 
@@ -261,6 +261,15 @@ extension EnsembleMultiDomains: ModelFlatbufferSerialisable {
         case .ukmo_uk_ensemble_2km:
             // TODO register in SDK
             return .ukmoGlobalEnsemble20km
+        case .ecmwf_aifs025:
+            return .ecmwfAifs025
+        case .meteoswiss_icon_ch1:
+            // todo register
+            return .iconD2
+        case .meteoswiss_icon_ch2:
+            // todo register
+            return .iconD2
         }
     }
 }
+*/

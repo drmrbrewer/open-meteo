@@ -688,7 +688,7 @@ enum EcmwfVariable: String, CaseIterable, Hashable, EcmwfVariableDownloadable, G
         case .pressure_msl:
             return (1 / 100, 0)
         case .precipitation, .showers, .snowfall_water_equivalent, .runoff:
-            if domain == .aifs025_single {
+            if domain == .aifs025_single || domain == .aifs025_ensemble {
                 // AIFS Single is already kg/m2
                 return (1, 0)
             }
@@ -704,7 +704,7 @@ enum EcmwfVariable: String, CaseIterable, Hashable, EcmwfVariableDownloadable, G
     var interpolation: ReaderInterpolation {
         switch self {
         case .precipitation, .showers, .snowfall_water_equivalent, .runoff: return .backwards_sum
-        case .cloud_cover, .cloud_cover_low, .cloud_cover_mid, .cloud_cover_high, .relative_humidity_1000hPa, .relative_humidity_925hPa, .relative_humidity_850hPa, .relative_humidity_700hPa, .relative_humidity_600hPa, .relative_humidity_500hPa, .relative_humidity_400hPa, .relative_humidity_300hPa, .relative_humidity_250hPa, .relative_humidity_200hPa, .relative_humidity_100hPa, .relative_humidity_50hPa: return .hermite(bounds: 0...100)
+        case .cloud_cover, .cloud_cover_low, .cloud_cover_mid, .cloud_cover_high, .relative_humidity_1000hPa, .relative_humidity_925hPa, .relative_humidity_850hPa, .relative_humidity_700hPa, .relative_humidity_600hPa, .relative_humidity_500hPa, .relative_humidity_400hPa, .relative_humidity_300hPa, .relative_humidity_250hPa, .relative_humidity_200hPa, .relative_humidity_100hPa, .relative_humidity_50hPa, .relative_humidity_2m: return .hermite(bounds: 0...100)
         case .shortwave_radiation: return .solar_backwards_averaged
         case .wind_gusts_10m: return .hermite(bounds: 0...1000)
         case .temperature_2m_min, .temperature_2m_max: return .backwards
@@ -868,6 +868,17 @@ enum EcmwfVariableDerived: String, GenericVariableMixable {
     case shortwave_radiation_instant
     case global_tilted_irradiance
     case global_tilted_irradiance_instant
+    
+    case sunshine_duration
+    case soil_moisture_0_to_100cm
+    case soil_temperature_0_to_100cm
+    case growing_degree_days_base_0_limit_50
+    case leaf_wetness_probability
+    case soil_moisture_index_0_to_7cm
+    case soil_moisture_index_7_to_28cm
+    case soil_moisture_index_28_to_100cm
+    case soil_moisture_index_100_to_255cm
+    case soil_moisture_index_0_to_100cm
 
     var requiresOffsetCorrectionForMixing: Bool {
         return false

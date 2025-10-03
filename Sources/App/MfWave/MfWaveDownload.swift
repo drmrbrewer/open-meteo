@@ -3,6 +3,12 @@ import Vapor
 import OmFileFormat
 import SwiftNetCDF
 
+struct NetCDFData<D: DataProtocol> {
+    let data: D
+    let nc: Group?
+    
+}
+
 /**
  Download MeteoFrance wave model from Marine Data Store
  
@@ -55,7 +61,7 @@ struct MfWaveDownload: AsyncCommand {
             for year in runs.groupedPreservedOrder(by: { $0.toComponents().year }) {
                 let handles = try await year.values.asyncFlatMap { run in
                     logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
-                    return try await download(application: context.application, domain: domain, run: run, onlyTides: signature.onlyTides)
+                    return try await download(application: context.application, domain: domain, run: run, onlyTides: signature.onlyTides, uploadS3Bucket: nil)
                 }
                 try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: nil, handles: handles, concurrent: nConcurrent, writeUpdateJson: false, uploadS3Bucket: nil, uploadS3OnlyProbabilities: false)
             }
@@ -65,17 +71,12 @@ struct MfWaveDownload: AsyncCommand {
         let run = try signature.run.flatMap(Timestamp.fromRunHourOrYYYYMMDD) ?? domain.lastRun
         logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
 
-        let handles = try await download(application: context.application, domain: domain, run: run, onlyTides: signature.onlyTides)
+        let handles = try await download(application: context.application, domain: domain, run: run, onlyTides: signature.onlyTides, uploadS3Bucket: signature.uploadS3Bucket)
         try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
-        
-        if let uploadS3Bucket = signature.uploadS3Bucket {
-            let timesteps = Array(handles.map { $0.time }.uniqued().sorted())
-            try domain.domainRegistry.syncToS3Spatial(bucket: uploadS3Bucket, timesteps: timesteps)
-        }
     }
 
     /// Download all timesteps and preliminarily covnert it to compressed files
-    func download(application: Application, domain: MfWaveDomain, run: Timestamp, onlyTides: Bool) async throws -> [GenericVariableHandle] {
+    func download(application: Application, domain: MfWaveDomain, run: Timestamp, onlyTides: Bool, uploadS3Bucket: String?) async throws -> [GenericVariableHandle] {
         let logger = application.logger
         try FileManager.default.createDirectory(atPath: domain.downloadDirectory, withIntermediateDirectories: true)
 
@@ -85,7 +86,6 @@ struct MfWaveDownload: AsyncCommand {
         let curl = Curl(logger: logger, client: application.dedicatedHttpClient)
         let nx = domain.grid.nx
         let ny = domain.grid.ny
-        let writer = OmRunSpatialWriter(domain: domain, run: run, storeOnDisk: true)
 
         // Note: The actual domain data area is slightly different
         /*if domain == .mfwave && !FileManager.default.fileExists(atPath: domain.surfaceElevationFileOm.getFilePath()) {
@@ -178,81 +178,51 @@ struct MfWaveDownload: AsyncCommand {
             dtSeconds: domain.stepHoursPerFile * 3600
         )
         logger.info("Downloadig timerange \(downloadRange.prettyString())")
+        
+        let writer = OmSpatialMultistepWriter(domain: domain, run: runDownload, storeOnDisk: true, realm: nil)
 
         // Iterate from d-1 to d+10 in 12 hour steps
-        let handles = try await downloadRange.asyncMap { step -> [GenericVariableHandle] in
+        for step in downloadRange {
             logger.info("Downloading file with timestap \(step.iso8601_YYYY_MM_dd_HH_mm) from run \(runDownload.format_YYYYMMddHH)")
 
-            let url = domain.getUrl(run: runDownload, step: step)
-            return try await url.asyncFlatMap({ url in
+            for url in domain.getUrl(run: runDownload, step: step) {
                 if onlyTides && !url.contains("MOL") {
-                    return []
+                    continue
                 }
                 let memory = try await curl.downloadInMemoryAsync(url: url, minSize: 1024 * 1024)
-                return try memory.withUnsafeReadableBytes({ memory in
-                    guard let nc = try NetCDF.open(memory: memory) else {
-                        fatalError("Could not open netcdf from memory")
+                guard let nc = try NetCDF.open(memory: memory) else {
+                    fatalError("Could not open netcdf from memory")
+                }
+                // Converted from "hours since 1950-01-01"
+                guard let timestamps = try nc.getVariable(name: "time")?
+                    .asType(Int32.self)?
+                    .read()
+                    .map({ Timestamp(Int($0) * 3600 + Timestamp(1950, 1, 1).timeIntervalSince1970) }) ??
+                        nc.getVariable(name: "time")?
+                    .asType(Float.self)?
+                    .read()
+                    .map({ Timestamp(Int($0) * 3600 + Timestamp(1950, 1, 1).timeIntervalSince1970) })
+                else {
+                    fatalError("Could not read time array")
+                }
+                for ncvar in nc.getVariables() {
+                    guard let variable = ncvar.toMfVariable() else {
+                        continue
                     }
-                    // Converted from "hours since 1950-01-01"
-                    guard let timestamps = try nc.getVariable(name: "time")?
-                        .asType(Int32.self)?
-                        .read()
-                        .map({ Timestamp(Int($0) * 3600 + Timestamp(1950, 1, 1).timeIntervalSince1970) }) ??
-                            nc.getVariable(name: "time")?
-                        .asType(Float.self)?
-                        .read()
-                        .map({ Timestamp(Int($0) * 3600 + Timestamp(1950, 1, 1).timeIntervalSince1970) })
-                    else {
-                        fatalError("Could not read time array")
-                    }
-                    return try nc.getVariables().map { ncvar -> [GenericVariableHandle] in
-                        guard let variable = ncvar.toMfVariable() else {
-                            return []
-                        }
 
-                        // Currents use floating point arrays
-                        if let ncFloat = ncvar.asType(Float.self) {
-                            return try timestamps.enumerated().map { i, timestamp -> GenericVariableHandle in
-                                logger.info("Process variable \(variable) timestamp \(timestamp.iso8601_YYYY_MM_dd_HH_mm)")
-                                let dimensions = ncvar.dimensions
-                                // Maybe has 4 dimensions for depth
-                                var data = dimensions.count > 3 ? try ncFloat.read(offset: [i, 0, 0, 0], count: [1, 1, ny, nx]) : try ncFloat.read(offset: [i, 0, 0], count: [1, ny, nx])
-                                if let fillValue: Float = try ncvar.getAttribute("_FillValue")?.read() {
-                                    for i in data.indices {
-                                        if data[i] == fillValue {
-                                            data[i] = .nan
-                                        }
-                                    }
-                                }
-                                if !FileManager.default.fileExists(atPath: domain.surfaceElevationFileOm.getFilePath()) {
-                                    // create land elevation file. 0=land, -999=sea
-                                    let elevation = data.map {
-                                        return $0.isNaN ? Float(0) : -999
-                                    }
-                                    try domain.surfaceElevationFileOm.createDirectory()
-                                    try elevation.writeOmFile2D(file: domain.surfaceElevationFileOm.getFilePath(), grid: domain.grid, createNetCdf: false)
-                                }
-                                return try writer.write(time: timestamp, member: 0, variable: variable, data: data)
-                            }
-                        }
-
-                        // Wave model use Int16 with scalefactor
-                        guard let ncInt16 = ncvar.asType(Int16.self) else {
-                            fatalError("Variable \(variable) is not Int16 type")
-                        }
-                        guard let scaleFactor: Float = try ncvar.getAttribute("scale_factor")?.read() else {
-                            fatalError("Could not get scalefactor")
-                        }
-                        guard let missingValue: Int16 = try ncvar.getAttribute("missing_value")?.read() else {
-                            fatalError("Could not get scalefactor")
-                        }
-                        return try timestamps.enumerated().map { i, timestamp -> GenericVariableHandle in
+                    // Currents use floating point arrays
+                    if let ncFloat = ncvar.asType(Float.self) {
+                        for (i, timestamp) in timestamps.enumerated() {
                             logger.info("Process variable \(variable) timestamp \(timestamp.iso8601_YYYY_MM_dd_HH_mm)")
-                            let data = try ncInt16.read(offset: [i, 0, 0], count: [1, ny, nx]).map {
-                                if $0 == missingValue {
-                                    return Float.nan
+                            let dimensions = ncvar.dimensions
+                            // Maybe has 4 dimensions for depth
+                            var data = dimensions.count > 3 ? try ncFloat.read(offset: [i, 0, 0, 0], count: [1, 1, ny, nx]) : try ncFloat.read(offset: [i, 0, 0], count: [1, ny, nx])
+                            if let fillValue: Float = try ncvar.getAttribute("_FillValue")?.read() {
+                                for i in data.indices {
+                                    if data[i] == fillValue {
+                                        data[i] = .nan
+                                    }
                                 }
-                                return Float($0) * scaleFactor
                             }
                             if !FileManager.default.fileExists(atPath: domain.surfaceElevationFileOm.getFilePath()) {
                                 // create land elevation file. 0=land, -999=sea
@@ -262,12 +232,43 @@ struct MfWaveDownload: AsyncCommand {
                                 try domain.surfaceElevationFileOm.createDirectory()
                                 try elevation.writeOmFile2D(file: domain.surfaceElevationFileOm.getFilePath(), grid: domain.grid, createNetCdf: false)
                             }
-                            return try writer.write(time: timestamp, member: 0, variable: variable, data: data)
+                            try await writer.write(time: timestamp, member: 0, variable: variable, data: data)
                         }
-                    }.flatMap({ $0 })
-                })
-            })
-        }.flatMap({ $0 })
+                        continue
+                    }
+
+                    // Wave model use Int16 with scalefactor
+                    guard let ncInt16 = ncvar.asType(Int16.self) else {
+                        fatalError("Variable \(variable) is not Int16 type")
+                    }
+                    guard let scaleFactor: Float = try ncvar.getAttribute("scale_factor")?.read() else {
+                        fatalError("Could not get scalefactor")
+                    }
+                    guard let missingValue: Int16 = try ncvar.getAttribute("missing_value")?.read() else {
+                        fatalError("Could not get scalefactor")
+                    }
+                    for (i, timestamp) in timestamps.enumerated() {
+                        logger.info("Process variable \(variable) timestamp \(timestamp.iso8601_YYYY_MM_dd_HH_mm)")
+                        let data = try ncInt16.read(offset: [i, 0, 0], count: [1, ny, nx]).map {
+                            if $0 == missingValue {
+                                return Float.nan
+                            }
+                            return Float($0) * scaleFactor
+                        }
+                        if !FileManager.default.fileExists(atPath: domain.surfaceElevationFileOm.getFilePath()) {
+                            // create land elevation file. 0=land, -999=sea
+                            let elevation = data.map {
+                                return $0.isNaN ? Float(0) : -999
+                            }
+                            try domain.surfaceElevationFileOm.createDirectory()
+                            try elevation.writeOmFile2D(file: domain.surfaceElevationFileOm.getFilePath(), grid: domain.grid, createNetCdf: false)
+                        }
+                        try await writer.write(time: timestamp, member: 0, variable: variable, data: data)
+                    }
+                }
+            }
+        }
+        let handles = try await writer.finalise(completed: true, validTimes: nil, uploadS3Bucket: uploadS3Bucket)
         await curl.printStatistics()
         return handles
     }

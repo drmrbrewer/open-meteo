@@ -37,11 +37,31 @@ enum OpenMeteo {
         return AtomicCacheCoordinator(cache: try! AtomicBlockCache(file: cacheFile, blockSize: blockSize, blockCount: blockCount))
     }()
     
+    /// Cache remote file meta data if `REMOTE_DATA_DIRECTORY` is set. 1 MB => 12k files
+    static let fileMetaCache: AtomicBlockCache<MmapFile> = { () -> AtomicBlockCache<MmapFile> in
+        let cacheFile = Environment.get("CACHE_META_FILE") ?? "\(dataDirectory)/cache_file_meta.bin"
+        let cacheSize = try! ByteSizeParser.parseSizeStringToBytes(Environment.get("CACHE_META_SIZE") ?? "1MB")
+        let blockSize = MemoryLayout<HttpMetaCache.Entry>.stride
+        let blockCount = cacheSize / (blockSize + 2 * MemoryLayout<Int64>.size)
+        return try! AtomicBlockCache(file: cacheFile, blockSize: blockSize, blockCount: blockCount)
+    }()
+    
     /// Data directory with trailing slash
     static let dataSpatialDirectory: String? = {
         if let dir = Environment.get("DATA_SPATIAL_DIRECTORY") {
             guard dir.last == "/" else {
                 fatalError("DATA_SPATIAL_DIRECTORY must end with a trailing slash")
+            }
+            return dir
+        }
+        return nil
+    }()
+    
+    /// Data directory with trailing slash
+    static let dataRunDirectory: String? = {
+        if let dir = Environment.get("DATA_RUN_DIRECTORY") {
+            guard dir.last == "/" else {
+                fatalError("DATA_RUN_DIRECTORY must end with a trailing slash")
             }
             return dir
         }
@@ -91,6 +111,32 @@ extension Application {
         }
         return new
     }
+    
+    fileprivate struct Http1ClientKey: StorageKey, LockKey {
+        typealias Value = HTTPClient
+    }
+    /// Get dedicated HTTPClient instance with a dedicated threadpool
+    var http1Client: HTTPClient {
+        let lock = self.locks.lock(for: Http1ClientKey.self)
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = self.storage[Http1ClientKey.self] {
+            return existing
+        }
+        var configuration = HTTPClient.Configuration(
+            redirectConfiguration: .disallow,
+            timeout: .init(connect: .seconds(30), read: .minutes(5)),
+            connectionPool: .init(idleTimeout: .minutes(10)))
+        configuration.httpVersion = .http1Only
+        let new = HTTPClient(
+            eventLoopGroupProvider: .shared(eventLoopGroup),
+            configuration: configuration,
+            backgroundActivityLogger: logger)
+        self.storage.set(Http1ClientKey.self, to: new) {
+            try $0.syncShutdown()
+        }
+        return new
+    }
 
     /// Create a new HTTP client instance. `shutdown` must be called after using it
     func makeNewHttpClient(httpVersion: HTTPClient.Configuration.HTTPVersion = .automatic, redirectConfiguration: HTTPClient.Configuration.RedirectConfiguration? = nil) -> HTTPClient {
@@ -118,7 +164,7 @@ public func configure(_ app: Application) throws {
         allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith, .userAgent, .accessControlAllowOrigin]
     )
     app.middleware.use(CORSMiddleware(configuration: corsConfiguration))
-    app.middleware.use(ErrorMiddleware.default(environment: try .detect()))
+    app.middleware.use(ErrorMiddleware.custom(environment: app.environment))
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
     app.commands.use(BenchmarkCommand(), as: "benchmark")
@@ -128,6 +174,7 @@ public func configure(_ app: Application) throws {
     app.asyncCommands.use(DownloadBomCommand(), as: "download-bom")
     app.asyncCommands.use(DownloadIconWaveCommand(), as: "download-iconwave")
     app.asyncCommands.use(DownloadEcmwfCommand(), as: "download-ecmwf")
+    app.asyncCommands.use(DownloadEcmwfEcpdsCommand(), as: "download-ecmwf-ecpds")
     app.asyncCommands.use(DownloadEra5Command(), as: "download-era5")
     app.asyncCommands.use(MfWaveDownload(), as: "download-mfwave")
     app.asyncCommands.use(DownloadDemCommand(), as: "download-dem")
@@ -139,7 +186,6 @@ public func configure(_ app: Application) throws {
     app.asyncCommands.use(EumetsatSarahDownload(), as: "download-eumetsat-sarah")
     app.asyncCommands.use(EumetsatLsaSafDownload(), as: "download-eumetsat-lsa-saf")
     app.asyncCommands.use(JaxaHimawariDownload(), as: "download-jaxa-himawari")
-    app.asyncCommands.use(SeasonalForecastDownload(), as: "download-seasonal-forecast")
     app.asyncCommands.use(ItaliaMeteoArpaeDownload(), as: "download-italia-meteo-arpae")
     app.asyncCommands.use(GfsDownload(), as: "download-gfs")
     app.asyncCommands.use(GfsGraphCastDownload(), as: "download-gfs-graphcast")
@@ -151,10 +197,12 @@ public func configure(_ app: Application) throws {
     app.asyncCommands.use(GemDownload(), as: "download-gem")
     app.asyncCommands.use(DownloadCmipCommand(), as: "download-cmip6")
     app.asyncCommands.use(SatelliteDownloadCommand(), as: "download-satellite")
+    app.asyncCommands.use(MeteoSwissDownload(), as: "download-meteoswiss")
     app.asyncCommands.use(SyncCommand(), as: "sync")
     app.asyncCommands.use(ExportCommand(), as: "export")
     app.asyncCommands.use(MergeYearlyCommand(), as: "merge-yearly")
     app.asyncCommands.use(ConvertOmCommand(), as: "convert-om")
+    app.asyncCommands.use(DownloadEcmwfSeasCommand(), as: "download-ecmwf-seas")
 
     app.http.server.configuration.hostname = "0.0.0.0"
 
@@ -179,15 +227,11 @@ public func configure(_ app: Application) throws {
         delay: .seconds(10),
         ApiKeyManager.update
     )
-    app.lifecycle.repeatedTask(
-        initialDelay: .seconds(0),
-        delay: .seconds(2),
-        MetaFileManager.instance.backgroundTask
-    )
+    // Those background tasks are not executed in parallel. The delay is after the call completes
     app.lifecycle.repeatedTask(
         initialDelay: .seconds(0),
         delay: .seconds(10),
-        RemoteOmFileManager.instance.backgroundTask
+        RemoteFileManager.instance.backgroundTask
     )
 
     app.lifecycle.repeatedTask(
@@ -199,4 +243,76 @@ public func configure(_ app: Application) throws {
 
     // register routes
     try routes(app)
+}
+
+
+extension ErrorMiddleware {
+    internal struct ErrorResponse2: Codable {
+        /// Always `true` to indicate this is a non-typical JSON response.
+        var error: Bool
+
+        /// The reason for the error.
+        var reason: String
+    }
+    
+    public static func custom(environment: Environment) -> ErrorMiddleware {
+        return .init { req, error in
+            let status: HTTPResponseStatus, reason: String, source: ErrorSource
+            var headers: HTTPHeaders
+
+            // Inspect the error type and extract what data we can.
+            switch error {
+            case let debugAbort as (DebuggableError & AbortError):
+                (reason, status, headers, source) = (debugAbort.reason, debugAbort.status, debugAbort.headers, debugAbort.source ?? .capture())
+                
+            case let abort as AbortError:
+                (reason, status, headers, source) = (abort.reason, abort.status, abort.headers, .capture())
+            
+            case let debugErr as DebuggableError:
+                (reason, status, headers, source) = (debugErr.reason, .internalServerError, [:], debugErr.source ?? .capture())
+            
+            default:
+                // In debug mode, provide the error description; otherwise hide it to avoid sensitive data disclosure.
+                reason = environment.isRelease ? "Something went wrong." : String(describing: error)
+                (status, headers, source) = (.internalServerError, [:], .capture())
+            }
+            
+            switch error {
+            case _ as RateLimitError:
+                fallthrough
+            case _ as ApiKeyManagerError:
+                // Do not log errors
+                break
+            default:
+                // Report the error
+                req.logger.report(error: error,
+                                  metadata: ["method" : "\(req.method.rawValue)",
+                                             "url" : "\(req.url.string)",
+                                             "userAgent" : .array(req.headers["User-Agent"].map { "\($0)" })],
+                                  file: source.file,
+                                  function: source.function,
+                                  line: source.line)
+            }
+            
+            
+            // attempt to serialize the error to json
+            let body: Response.Body
+            do {
+                let encoder = try ContentConfiguration.global.requireEncoder(for: .json)
+                var byteBuffer = req.byteBufferAllocator.buffer(capacity: 0)
+                try encoder.encode(ErrorResponse2(error: true, reason: reason), to: &byteBuffer, headers: &headers)
+                
+                body = .init(
+                    buffer: byteBuffer,
+                    byteBufferAllocator: req.byteBufferAllocator
+                )
+            } catch {
+                body = .init(string: "Oops: \(String(describing: error))\nWhile encoding error: \(reason)", byteBufferAllocator: req.byteBufferAllocator)
+                headers.contentType = .plainText
+            }
+            
+            // create a Response with appropriate status
+            return Response(status: status, headers: headers, body: body)
+        }
+    }
 }

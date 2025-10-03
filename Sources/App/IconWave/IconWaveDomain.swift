@@ -15,6 +15,10 @@ enum IconWaveDomain: String, CaseIterable, GenericDomain {
     var masterTimeRange: Range<Timestamp>? {
         return nil
     }
+    
+    var countEnsembleMember: Int {
+        return 1
+    }
 
     var domainRegistry: DomainRegistry {
         switch self {
@@ -44,7 +48,7 @@ enum IconWaveDomain: String, CaseIterable, GenericDomain {
         }
     }
 
-    var grid: Gridable {
+    var grid: any Gridable {
         switch self {
         case .gwam:
             return RegularGrid(nx: 1440, ny: 699, latMin: -85.25, lonMin: -180, dx: 0.25, dy: 0.25)

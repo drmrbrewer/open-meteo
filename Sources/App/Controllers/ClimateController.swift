@@ -1,6 +1,7 @@
 import Foundation
 import OmFileFormat
 import Vapor
+import OpenMeteoSdk
 
 struct CmipController {
     func query(_ req: Request) async throws -> Response {
@@ -12,7 +13,7 @@ struct CmipController {
 
             let prepared = try await params.prepareCoordinates(allowTimezones: false, logger: logger, httpClient: httpClient)
             guard case .coordinates(let prepared) = prepared else {
-                throw ForecastapiError.generic(message: "Bounding box not supported")
+                throw ForecastApiError.generic(message: "Bounding box not supported")
             }
             let domains = try Cmip6Domain.load(commaSeparatedOptional: params.models) ?? [.MRI_AGCM3_2_S]
             let paramsDaily = try Cmip6VariableOrDerivedPostBias.load(commaSeparatedOptional: params.daily)
@@ -21,62 +22,112 @@ struct CmipController {
             let biasCorrection = !(params.disable_bias_correction ?? false)
             let options = try params.readerOptions(logger: logger, httpClient: httpClient)
 
-            let locations: [ForecastapiResult<Cmip6Domain>.PerLocation] = try await prepared.asyncMap { prepared in
+            let locations: [ForecastapiResult<CmipDomainsReader>.PerLocation] = try await prepared.asyncMap { prepared in
                 let coordinates = prepared.coordinate
                 let timezone = prepared.timezone
                 let time = try params.getTimerange2(timezone: timezone, current: currentTime, forecastDaysDefault: 7, forecastDaysMax: 14, startEndDate: prepared.startEndDate, allowedRange: allowedRange, pastDaysMax: 92)
                 let timeLocal = TimerangeLocal(range: time.dailyRead.range, utcOffsetSeconds: timezone.utcOffsetSeconds)
 
-                let readers: [ForecastapiResult<Cmip6Domain>.PerModel] = try await domains.asyncCompactMap { domain in
+                let readers: [CmipDomainsReader] = try await domains.asyncCompactMap { domain in
                     let reader: any Cmip6Readerable = try await {
                         if biasCorrection {
                             guard let reader = try await Cmip6BiasCorrectorEra5Seamless(domain: domain, lat: coordinates.latitude, lon: coordinates.longitude, elevation: coordinates.elevation, mode: params.cell_selection ?? .land, options: options) else {
-                                throw ForecastapiError.noDataAvilableForThisLocation
+                                throw ForecastApiError.noDataAvailableForThisLocation
                             }
                             return Cmip6ReaderPostBiasCorrected(reader: reader, domain: domain)
                         } else {
                             guard let reader = try await GenericReader<Cmip6Domain, Cmip6Variable>(domain: domain, lat: coordinates.latitude, lon: coordinates.longitude, elevation: coordinates.elevation, mode: params.cell_selection ?? .land, options: options) else {
-                                throw ForecastapiError.noDataAvilableForThisLocation
+                                throw ForecastApiError.noDataAvailableForThisLocation
                             }
                             let reader2 = Cmip6ReaderPreBiasCorrection(reader: reader, domain: domain)
                             return Cmip6ReaderPostBiasCorrected(reader: reader2, domain: domain)
                         }
                     }()
-                    return ForecastapiResult<Cmip6Domain>.PerModel(
-                        model: domain,
-                        latitude: reader.modelLat,
-                        longitude: reader.modelLon,
-                        elevation: reader.targetElevation,
-                        prefetch: {
-                            if let dailyVariables = paramsDaily {
-                                try await reader.prefetchData(variables: dailyVariables, time: time.dailyRead.toSettings())
-                            }
-                        },
-                        current: nil,
-                        hourly: nil,
-                        daily: paramsDaily.map { paramsDaily in
-                            return {
-                                return ApiSection(name: "daily", time: time.dailyDisplay, columns: try await paramsDaily.asyncMap { variable in
-                                    let d = try await reader.get(variable: variable, time: time.dailyRead.toSettings()).convertAndRound(params: params)
-                                    assert(time.dailyRead.count == d.data.count)
-                                    return ApiColumn(variable: variable, unit: d.unit, variables: [.float(d.data)])
-                                })
-                            }
-                        },
-                        sixHourly: nil,
-                        minutely15: nil
-                    )
+                    return CmipDomainsReader(domain: domain, reader: reader, params: params, time: time)
                 }
                 guard !readers.isEmpty else {
-                    throw ForecastapiError.noDataAvilableForThisLocation
+                    throw ForecastApiError.noDataAvailableForThisLocation
                 }
                 return .init(timezone: timezone, time: timeLocal, locationId: coordinates.locationId, results: readers)
             }
             // Currently the old calculation basically blocks climate data access very early. Adjust weigthing a bit
-            return ForecastapiResult<Cmip6Domain>(timeformat: params.timeformatOrDefault, results: locations, nVariablesTimesDomains: nVariables / 24 / 5)
+            return ForecastapiResult<CmipDomainsReader>(timeformat: params.timeformatOrDefault, results: locations, currentVariables: nil, minutely15Variables: nil, hourlyVariables: nil, sixHourlyVariables: nil, dailyVariables: paramsDaily, monthlyVariables: nil, nVariablesTimesDomains: nVariables / 24 / 5)
         }
     }
 }
+
+struct CmipDomainsReader: ModelFlatbufferSerialisable {
+    typealias HourlyVariable = FlatBuffersVariableNone
+    
+    typealias DailyVariable = Cmip6VariableOrDerivedPostBias
+    
+    typealias MonthlyVariable = FlatBuffersVariableNone
+    
+    let domain: Cmip6Domain
+    
+    var flatBufferModel: OpenMeteoSdk.openmeteo_sdk_Model {
+        domain.flatBufferModel
+    }
+    
+    var modelName: String {
+        domain.rawValue
+    }
+    
+    let reader: any Cmip6Readerable
+    
+    var latitude: Float {
+        reader.modelLat
+    }
+    
+    var longitude: Float {
+        reader.modelLon
+    }
+    
+    var elevation: Float? {
+        reader.targetElevation
+    }
+    
+    let params: ApiQueryParameter
+    let time: ForecastApiTimeRange
+    
+    func prefetch(currentVariables: [HourlyVariable]?, minutely15Variables: [HourlyVariable]?, hourlyVariables: [HourlyVariable]?, sixHourlyVariables: [HourlyVariable]?, dailyVariables: [DailyVariable]?, monthlyVariables: [MonthlyVariable]?) async throws {
+        if let dailyVariables = dailyVariables {
+            try await reader.prefetchData(variables: dailyVariables, time: time.dailyRead.toSettings())
+        }
+    }
+
+    func current(variables: [HourlyVariable]?) async throws -> ApiSectionSingle<HourlyVariable>? {
+        return nil
+    }
+    
+    func hourly(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>? {
+        return nil
+    }
+    
+    func daily(variables: [DailyVariable]?) async throws -> ApiSection<DailyVariable>? {
+        guard let variables else {
+            return nil
+        }
+        return ApiSection(name: "daily", time: time.dailyDisplay, columns: try await variables.asyncMap { variable in
+            let d = try await reader.get(variable: variable, time: time.dailyRead.toSettings()).convertAndRound(params: params)
+            assert(time.dailyRead.count == d.data.count)
+            return ApiColumn(variable: variable, unit: d.unit, variables: [.float(d.data)])
+        })
+    }
+    
+    func sixHourly(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>? {
+        return nil
+    }
+    
+    func minutely15(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>? {
+        return nil
+    }
+    
+    func monthly(variables: [MonthlyVariable]?) async throws -> ApiSection<HourlyVariable>? {
+        return nil
+    }
+}
+
 
 protocol Cmip6Readerable {
     func prefetchData(variables: [Cmip6VariableOrDerivedPostBias], time: TimerangeDtAndSettings) async throws
@@ -272,7 +323,7 @@ struct Cmip6BiasCorrectorEra5Seamless: GenericReaderProtocol {
             }
         }
         guard let variable = ForecastVariableDaily(rawValue: variable.rawValue), let referenceWeightFile = try await readerEra5.domain.openBiasCorrectionFile(for: variable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(readerEra5.domain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(readerEra5.domain)")
         }
         let nTime = Int(referenceWeightFile.getDimensions().last!)
         var weights = [Float](repeating: .nan, count: nTime)
@@ -296,7 +347,7 @@ struct Cmip6BiasCorrectorEra5Seamless: GenericReaderProtocol {
         var data = raw.data
 
         guard let controlWeightFile = try await reader.domain.openBiasCorrectionFile(for: variable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
         }
         let nTime = Int(controlWeightFile.getDimensions().last!)
         var weights = [Float](repeating: .nan, count: nTime)
@@ -404,7 +455,7 @@ final class Cmip6BiasCorrectorInterpolatedWeights: GenericReaderProtocol {
         let client = reader.reader.httpClient
         let logger = reader.reader.logger
         guard let elevationFile = await referenceDomain.getStaticFile(type: .elevation, httpClient: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Elevation file for domain \(referenceDomain) is missing")
+            throw ForecastApiError.generic(message: "Elevation file for domain \(referenceDomain) is missing")
         }
         let referenceElevation = try await referenceDomain.grid.readElevationInterpolated(gridpoint: referencePosition, elevationFile: elevationFile)
         self._referenceElevation = referenceElevation
@@ -418,7 +469,7 @@ final class Cmip6BiasCorrectorInterpolatedWeights: GenericReaderProtocol {
         let logger = reader.reader.logger
 
         guard let controlWeightFile = try await reader.domain.openBiasCorrectionFile(for: variable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
         }
         let nTime = Int(controlWeightFile.getDimensions().last!)
         var weights = [Float](repeating: .nan, count: nTime)
@@ -435,7 +486,7 @@ final class Cmip6BiasCorrectorInterpolatedWeights: GenericReaderProtocol {
         let controlWeights = BiasCorrectionSeasonalLinear(meansPerYear: weights)
 
         guard let referenceVariable = ForecastVariableDaily(rawValue: variable.rawValue), let referenceWeightFile = try await referenceDomain.openBiasCorrectionFile(for: referenceVariable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(referenceDomain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(referenceDomain)")
         }
         let referenceWeights = await BiasCorrectionSeasonalLinear(meansPerYear: try referenceWeightFile.readInterpolated(dim0: referencePosition, dim0Nx: referenceDomain.grid.nx, dim1: 0..<Int(referenceWeightFile.getDimensions().last!)))
 
@@ -524,7 +575,7 @@ struct Cmip6BiasCorrectorGenericDomain: GenericReaderProtocol {
         let logger = reader.reader.logger
 
         guard let controlWeightFile = try await reader.domain.openBiasCorrectionFile(for: variable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(reader.domain)")
         }
         let nTime = Int(controlWeightFile.getDimensions().last!)
         var weights = [Float](repeating: .nan, count: nTime)
@@ -541,7 +592,7 @@ struct Cmip6BiasCorrectorGenericDomain: GenericReaderProtocol {
         let controlWeights = BiasCorrectionSeasonalLinear(meansPerYear: weights)
 
         guard let referenceVariable = ForecastVariableDaily(rawValue: variable.rawValue), let referenceWeightFile = try await referenceDomain.openBiasCorrectionFile(for: referenceVariable.rawValue, client: client, logger: logger) else {
-            throw ForecastapiError.generic(message: "Could not read reference weight file \(variable) for domain \(referenceDomain)")
+            throw ForecastApiError.generic(message: "Could not read reference weight file \(variable) for domain \(referenceDomain)")
         }
         let nTime2 = Int(referenceWeightFile.getDimensions().last!)
         var weights2 = [Float](repeating: .nan, count: nTime)
@@ -599,7 +650,7 @@ struct Cmip6BiasCorrectorGenericDomain: GenericReaderProtocol {
     init?(domain: Cmip6Domain, referenceDomain: GenericDomain, referencePosition: Int, referenceElevation: ElevationOrSea, options: GenericReaderOptions) async throws {
         let (lat, lon) = referenceDomain.grid.getCoordinates(gridpoint: referencePosition)
         guard let reader = try await GenericReader<Cmip6Domain, Cmip6Variable>(domain: domain, lat: lat, lon: lon, elevation: referenceElevation.numeric, mode: .nearest, options: options) else {
-            throw ForecastapiError.noDataAvilableForThisLocation
+            throw ForecastApiError.noDataAvailableForThisLocation
         }
         self.reader = Cmip6ReaderPreBiasCorrection(reader: reader, domain: domain)
         self.referenceDomain = referenceDomain
@@ -656,7 +707,7 @@ struct Cmip6ReaderPostBiasCorrected<ReaderNext: GenericReaderProtocol>: GenericR
             }), .gddCelsius)
         case .soil_moisture_index_0_to_10cm_mean:
             guard let soilType = try await self.getStatic(type: .soilType) else {
-                throw ForecastapiError.generic(message: "Could not read soil type")
+                throw ForecastApiError.generic(message: "Could not read soil type")
             }
             guard let type = SoilTypeEra5(rawValue: Int(soilType)) else {
                 // 0 = water
@@ -666,7 +717,7 @@ struct Cmip6ReaderPostBiasCorrected<ReaderNext: GenericReaderProtocol>: GenericR
             return DataAndUnit(type.calculateSoilMoistureIndex(soilMoisture.data), .fraction)
         case .soil_moisture_index_0_to_100cm_mean:
             guard let soilType = try await self.getStatic(type: .soilType) else {
-                throw ForecastapiError.generic(message: "Could not read soil type")
+                throw ForecastApiError.generic(message: "Could not read soil type")
             }
             guard let type = SoilTypeEra5(rawValue: Int(soilType)) else {
                 return DataAndUnit([Float](repeating: .nan, count: time.time.count), .fraction)
