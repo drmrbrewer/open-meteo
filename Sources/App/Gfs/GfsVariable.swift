@@ -101,17 +101,6 @@ enum GfsSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         }
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        switch self {
-        case .soil_moisture_0_to_10cm: return true
-        case .soil_moisture_10_to_40cm: return true
-        case .soil_moisture_40_to_100cm: return true
-        case .soil_moisture_100_to_200cm: return true
-        case .snow_depth: return true
-        default: return false
-        }
-    }
-
     var omFileName: (file: String, level: Int) {
         return (rawValue, 0)
     }
@@ -230,7 +219,7 @@ enum GfsSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         case .categorical_freezing_rain:
             return .backwards
         case .wind_gusts_10m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .freezing_level_height:
             return .linear
         case .shortwave_radiation:
@@ -337,10 +326,6 @@ struct GfsPressureVariable: PressureVariableRespresentable, GenericVariable, Has
     let level: Int
 
     var storePreviousForecast: Bool {
-        return false
-    }
-
-    var requiresOffsetCorrectionForMixing: Bool {
         return false
     }
 

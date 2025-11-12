@@ -37,6 +37,7 @@ enum DomainRegistry: String, CaseIterable {
     case cmc_gem_gdps
     case cmc_gem_geps
     case cmc_gem_hrdps
+    case cmc_gem_hrdps_west
     case cmc_gem_rdps
 
     case ncep_gfs013
@@ -86,11 +87,13 @@ enum DomainRegistry: String, CaseIterable {
     case ecmwf_ifs_analysis
     case ecmwf_ifs_analysis_long_window
     case ecmwf_ifs_long_window
-    case ecmwf_seas5_6hourly
+    case ecmwf_seas5
     case ecmwf_seas5_12hourly
-    case ecmwf_seas5_24hourly
+    case ecmwf_seas5_daily
     case ecmwf_seas5_monthly_upper_level
     case ecmwf_seas5_monthly
+    case ecmwf_ec46
+    case ecmwf_ec46_weekly
 
     case jma_msm
     case jma_gsm
@@ -127,6 +130,8 @@ enum DomainRegistry: String, CaseIterable {
 
     case eumetsat_sarah3_30min
     case jma_jaxa_himawari_10min
+    case jma_jaxa_himawari_70e_10min
+    case jma_jaxa_mtg_fci_10min
     case eumetsat_lsa_saf_msg_15min
     case eumetsat_lsa_saf_iodc_15min
 
@@ -214,6 +219,8 @@ enum DomainRegistry: String, CaseIterable {
             return GemDomain.gem_global_ensemble
         case .cmc_gem_hrdps:
             return GemDomain.gem_hrdps_continental
+        case .cmc_gem_hrdps_west:
+            return GemDomain.gem_hrdps_west
         case .cmc_gem_rdps:
             return GemDomain.gem_regional
         case .ncep_gfs013:
@@ -278,16 +285,20 @@ enum DomainRegistry: String, CaseIterable {
             return EcmwfDomain.aifs025_single
         case .ecmwf_aifs025_ensemble:
             return EcmwfDomain.aifs025_ensemble
-        case .ecmwf_seas5_6hourly:
-            return EcmwfSeasDomain.seas5_6hourly
+        case .ecmwf_seas5:
+            return EcmwfSeasDomain.seas5
         case .ecmwf_seas5_12hourly:
             return EcmwfSeasDomain.seas5_12hourly
-        case .ecmwf_seas5_24hourly:
-            return EcmwfSeasDomain.seas5_24hourly
+        case .ecmwf_seas5_daily:
+            return EcmwfSeasDomain.seas5_daily
         case .ecmwf_seas5_monthly_upper_level:
             return EcmwfSeasDomain.seas5_monthly_upper_level
         case .ecmwf_seas5_monthly:
             return EcmwfSeasDomain.seas5_monthly
+        case .ecmwf_ec46:
+            return EcmwfSeasDomain.ec46
+        case .ecmwf_ec46_weekly:
+            return EcmwfSeasDomain.ec46_weekly
         case .jma_msm:
             return JmaDomain.msm
         case .ncep_cfsv2:
@@ -367,6 +378,10 @@ enum DomainRegistry: String, CaseIterable {
             return EumetsatSarahDomain.sarah3_30min
         case .jma_jaxa_himawari_10min:
             return JaxaHimawariDomain.himawari_10min
+        case .jma_jaxa_himawari_70e_10min:
+            return JaxaHimawariDomain.himawari_70e_10min
+        case .jma_jaxa_mtg_fci_10min:
+            return JaxaHimawariDomain.mtg_fci_10min
         case .eumetsat_lsa_saf_msg_15min:
             return EumetsatLsaSafDomain.msg
         case .eumetsat_lsa_saf_iodc_15min:

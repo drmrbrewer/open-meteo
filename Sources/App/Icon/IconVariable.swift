@@ -16,10 +16,6 @@ struct IconPressureVariable: PressureVariableRespresentable, Hashable, GenericVa
         return false
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
-
     var omFileName: (file: String, level: Int) {
         (rawValue, 0)
     }
@@ -327,19 +323,6 @@ enum IconSurfaceVariable: String, CaseIterable, GenericVariableMixable, Sendable
         }
     }
 
-    /// Soil moisture or snow depth are cumulative processes and have offsets if multiple models are mixed
-    var requiresOffsetCorrectionForMixing: Bool {
-        switch self {
-        case .soil_moisture_0_to_1cm: return true
-        case .soil_moisture_1_to_3cm: return true
-        case .soil_moisture_3_to_9cm: return true
-        case .soil_moisture_9_to_27cm: return true
-        case .soil_moisture_27_to_81cm: return true
-        case .snow_depth: return true
-        default: return false
-        }
-    }
-
     /// Name in dwd filenames
     var omFileName: (file: String, level: Int) {
         return (rawValue, 0)
@@ -426,7 +409,7 @@ enum IconSurfaceVariable: String, CaseIterable, GenericVariableMixable, Sendable
         case .lightning_potential:
             return .linear
         case .wind_gusts_10m:
-            return .linear
+            return .hermite(bounds: 0...10e9)
         case .snowfall_height:
             return .linear
         case .freezing_level_height:

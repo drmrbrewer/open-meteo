@@ -49,8 +49,6 @@ enum EcmwfEcdpsIfsVariableDerived: String, GenericVariableMixable {
     case cloudcover_high
 
     case sunshine_duration
-    case terrestrial_radiation
-    case terrestrial_radiation_instant
     case direct_normal_irradiance
     case direct_normal_irradiance_instant
     case direct_radiation_instant
@@ -69,10 +67,8 @@ enum EcmwfEcdpsIfsVariableDerived: String, GenericVariableMixable {
     case soil_moisture_index_28_to_100cm
     case soil_moisture_index_100_to_255cm
     case soil_moisture_index_0_to_100cm
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
+    
+    case snow_depth_water_equivalent
 }
 
 
@@ -179,7 +175,8 @@ struct EcmwfEcpdsReader: GenericReaderDerived, GenericReaderProtocol {
             let precipitation = try await get(raw: .precipitation, time: time)
             let snow = try await get(raw: .snowfall_water_equivalent, time: time).data
             let showers = try await get(raw: .showers, time: time).data
-            return DataAndUnit(zip(precipitation.data, zip(snow, showers)).map { max($0 - $1.0 - $1.1, 0) }, .millimetre)
+            // Showers may be 0 before october 2025
+            return DataAndUnit(zip(precipitation.data, zip(snow, showers)).map { max($0 - $1.0 - ($1.1.isNaN ? 0 : $1.1), 0) }, .millimetre)
         case .is_day:
             return DataAndUnit(Zensun.calculateIsDay(timeRange: time.time, lat: reader.modelLat, lon: reader.modelLon), .dimensionlessInteger)
         case .soil_temperature_0cm, .skin_temperature:
@@ -218,14 +215,6 @@ struct EcmwfEcpdsReader: GenericReaderDerived, GenericReaderProtocol {
             return try await get(raw: .cloud_cover_mid, time: time)
         case .cloudcover_high:
             return try await get(raw: .cloud_cover_high, time: time)
-        case .terrestrial_radiation:
-            /// Use center averaged
-            let solar = Zensun.extraTerrestrialRadiationBackwards(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
-        case .terrestrial_radiation_instant:
-            /// Use center averaged
-            let solar = Zensun.extraTerrestrialRadiationInstant(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
         case .shortwave_radiation_instant:
             let sw = try await get(raw: .shortwave_radiation, time: time)
             let factor = Zensun.backwardsAveragedToInstantFactor(time: time.time, latitude: reader.modelLat, longitude: reader.modelLon)
@@ -351,13 +340,17 @@ struct EcmwfEcpdsReader: GenericReaderDerived, GenericReaderProtocol {
             }
             let soilMoisture = try await get(derived: .soil_moisture_0_to_100cm, time: time)
             return DataAndUnit(type.calculateSoilMoistureIndex(soilMoisture.data), .fraction)
+        case .snow_depth_water_equivalent:
+            // snow depth in metre
+            // water equivalent in millimetre, density in kg/m3
+            let depth = try await get(raw: .snow_depth, time: time)
+            let density = try await get(raw: .snow_density, time: time)
+            return DataAndUnit(zip(depth.data, density.data).map({$0*$1}), .millimetre)
         }
     }
 
     func prefetchData(derived: Derived, time: TimerangeDtAndSettings) async throws {
         switch derived {
-        case .terrestrial_radiation, .terrestrial_radiation_instant:
-            break
         case .shortwave_radiation_instant:
             try await prefetchData(raw: .shortwave_radiation, time: time)
         case .diffuse_radiation_instant:
@@ -458,6 +451,9 @@ struct EcmwfEcpdsReader: GenericReaderDerived, GenericReaderProtocol {
             try await prefetchData(derived: .soil_moisture_0_to_100cm, time: time)
         case .sunshine_duration:
             try await prefetchData(raw: .direct_radiation, time: time)
+        case .snow_depth_water_equivalent:
+            try await prefetchData(raw: .snow_density, time: time)
+            try await prefetchData(raw: .snow_depth, time: time)
         }
     }
 }

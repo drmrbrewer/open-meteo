@@ -1,17 +1,17 @@
 on:
   workflow_dispatch:
 
-name: Build ubuntu noble
+name: Build ubuntu package DEBUG
 
 env:
   swift_package_resolve: swift package resolve
-  swift_build: MARCH_SKYLAKE=TRUE swift build -c release -Xswiftc -g -Xswiftc -static-stdlib
+  swift_build: MARCH_SKYLAKE=TRUE swift build -c debug -Xswiftc -g -Xswiftc -static-stdlib
   swift_test: swift test
   cache_version: 2
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     container: ghcr.io/open-meteo/docker-container-build:latest
     name: Linux
     steps:
@@ -39,27 +39,27 @@ jobs:
       run: |
         ${{ env.swift_build }}
         mkdir Resources
-        cp .build/release/openmeteo-api openmeteo-api
-        cp -r .build/release/*.resources Resources/
+        cp .build/debug/openmeteo-api openmeteo-api
+        cp -r .build/debug/*.resources Resources/
     - name: Package
       uses: gravitl/github-action-fpm@master
       with:
         fpm_args: './build'
         # -d swiftlang-slim -d libeccodes0
-        fpm_opts: '-s dir -t deb -n openmeteo-api -v 0.0.0 -d tzdata -d libnetcdf19t64 -d libeccodes0 --deb-systemd-enable --deb-systemd-auto-start --deb-systemd build/openmeteo-sync.service --deb-systemd build/openmeteo-api.service  --deb-systemd build/openmeteo-api2.service  --deb-systemd build/openmeteo-api3.service --deb-default build/openmeteo-api.env --before-install build/openmeteo-before-install.sh --before-upgrade build/openmeteo-before-install.sh build/openmeteo-notify.sh=/usr/local/bin/ openmeteo-api=/usr/local/bin/ swift-backtrace=/usr/local/bin/ Public=/var/lib/openmeteo-api Resources=/var/lib/openmeteo-api'
+        fpm_opts: '-s dir -t deb -n openmeteo-api -v 0.0.0 -d tzdata -d libnetcdf19 -d libeccodes0 --deb-systemd-enable --deb-systemd-auto-start --deb-systemd build/openmeteo-sync.service --deb-systemd build/openmeteo-api.service  --deb-systemd build/openmeteo-api2.service  --deb-systemd build/openmeteo-api3.service --deb-default build/openmeteo-api.env --before-install build/openmeteo-before-install.sh --before-upgrade build/openmeteo-before-install.sh build/openmeteo-notify.sh=/usr/local/bin/ openmeteo-api=/usr/local/bin/ swift-backtrace=/usr/local/bin/ Public=/var/lib/openmeteo-api Resources=/var/lib/openmeteo-api'
     - name: Rename deb file
-      run: mv openmeteo-api_0.0.0_amd64.deb openmeteo-api_0.0.0_noble_amd64.deb
+      run: mv openmeteo-api_0.0.0_amd64.deb openmeteo-api_0.0.0_jammy_amd64.deb
     # - name: 'Upload Artifact'
     #   uses: actions/upload-artifact@v4
     #   with:
-    #     name: openmeteo-api_0.0.0_noble_amd64.deb
-    #     path: openmeteo-api_0.0.0_noble_amd64.deb
+    #     name: openmeteo-api_0.0.0_jammy_amd64.deb
+    #     path: openmeteo-api_0.0.0_jammy_amd64.deb
     #     retention-days: 14
     - name: 'Upload Artifact to CDN'
       run: |
         curl --request PUT \
-          --url https://storage.bunnycdn.com/dpkg-manual/openmeteo-api_0.0.0_noble_amd64.deb \
+          --url https://storage.bunnycdn.com/dpkg-manual/openmeteo-api_0.0.0_jammy_amd64.deb \
           --header 'AccessKey: ${{ secrets.ftp_password_dpkg_manual }}' \
           --header 'Content-Type: application/octet-stream' \
           --header 'accept: application/json'  \
-          --data-binary "@openmeteo-api_0.0.0_noble_amd64.deb"
+          --data-binary "@openmeteo-api_0.0.0_jammy_amd64.deb"

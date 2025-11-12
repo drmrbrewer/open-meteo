@@ -53,10 +53,6 @@ enum UkmoSurfaceVariable: String, CaseIterable, UkmoVariableDownloadable, Generi
         }
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
-
     var omFileName: (file: String, level: Int) {
         return (rawValue, 0)
     }
@@ -129,13 +125,13 @@ enum UkmoSurfaceVariable: String, CaseIterable, UkmoVariableDownloadable, Generi
         case .relative_humidity_2m:
             return .hermite(bounds: 0...100)
         case .wind_speed_10m:
-            return .hermite(bounds: 0...1000)
+            return .hermite(bounds: 0...10e9)
         case .rain, .precipitation, .hail, .showers:
             return .backwards_sum
         case .snowfall_water_equivalent, .snow_depth_water_equivalent:
             return .backwards_sum
         case .wind_gusts_10m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .shortwave_radiation, .direct_radiation:
             return .solar_backwards_averaged
         case .wind_direction_10m:
@@ -419,10 +415,6 @@ struct UkmoPressureVariable: PressureVariableRespresentable, UkmoVariableDownloa
         return false
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
-
     var omFileName: (file: String, level: Int) {
         return (rawValue, 0)
     }
@@ -452,7 +444,7 @@ struct UkmoPressureVariable: PressureVariableRespresentable, UkmoVariableDownloa
         case .temperature:
             return .hermite(bounds: nil)
         case .wind_speed:
-            return .hermite(bounds: 0...1000)
+            return .hermite(bounds: 0...10e9)
         case .wind_direction:
             return .linearDegrees
         case .geopotential_height:
@@ -557,10 +549,6 @@ struct UkmoHeightVariable: HeightVariableRespresentable, UkmoVariableDownloadabl
         }
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
-
     var omFileName: (file: String, level: Int) {
         return (rawValue, 0)
     }
@@ -584,7 +572,7 @@ struct UkmoHeightVariable: HeightVariableRespresentable, UkmoVariableDownloadabl
         case .temperature:
             return .hermite(bounds: nil)
         case .wind_speed:
-            return .hermite(bounds: 0...1000)
+            return .hermite(bounds: 0...10e9)
         case .wind_direction:
             return .linearDegrees
         case .cloud_cover:

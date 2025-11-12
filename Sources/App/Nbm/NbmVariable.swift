@@ -13,6 +13,8 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
     case wind_speed_80m
     case wind_direction_80m
     case snowfall
+    case snowfall_water_equivalent
+    case snowfall_height
     case wind_gusts_10m
     case shortwave_radiation
     case cape
@@ -24,11 +26,12 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
     case ice_pellets_probability
     case snowfall_probability
     case surface_temperature
+    
 
     var storePreviousForecast: Bool {
         switch self {
         case .temperature_2m, .relative_humidity_2m: return true
-        case .precipitation, .snowfall: return true
+        case .precipitation, .snowfall, .snowfall_water_equivalent: return true
         case .cloud_cover: return true
         case .shortwave_radiation: return true
         case .wind_gusts_10m, .wind_speed_10m, .wind_direction_10m: return true
@@ -37,10 +40,6 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         case .wind_speed_80m, .wind_direction_80m: return true
         default: return false
         }
-    }
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
     }
 
     var omFileName: (file: String, level: Int) {
@@ -64,6 +63,10 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         case .visibility: return 0.05 // 50 meter
         case .precipitation_probability, .thunderstorm_probability, .rain_probability, .freezing_rain_probability, .ice_pellets_probability, .snowfall_probability:
             return 1
+        case .snowfall_water_equivalent:
+            return 10
+        case .snowfall_height:
+            return 0.1
         }
     }
 
@@ -79,7 +82,7 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
             return .linear
         case .relative_humidity_2m:
             return .hermite(bounds: 0...100)
-        case .precipitation:
+        case .precipitation, .snowfall_water_equivalent:
             return .backwards_sum
         case .snowfall:
             return .backwards_sum
@@ -95,6 +98,8 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
             return .backwards
         case .rain_probability, .freezing_rain_probability, .ice_pellets_probability, .snowfall_probability:
             return .linear
+        case .snowfall_height:
+            return .linear
         }
     }
 
@@ -103,7 +108,7 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         case .temperature_2m, .surface_temperature: return .celsius
         case .cloud_cover: return .percentage
         case .relative_humidity_2m: return .percentage
-        case .precipitation: return .millimetre
+        case .precipitation, .snowfall_water_equivalent: return .millimetre
         case .snowfall: return .centimetre
         case .wind_speed_10m, .wind_speed_80m: return .metrePerSecond
         case .wind_direction_10m, .wind_direction_80m: return .degreeDirection
@@ -113,6 +118,8 @@ enum NbmSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableM
         case .visibility: return .metre
         case .precipitation_probability, .thunderstorm_probability, .rain_probability, .freezing_rain_probability, .ice_pellets_probability, .snowfall_probability:
             return .percentage
+        case .snowfall_height:
+            return .metre
         }
     }
 
@@ -147,10 +154,6 @@ struct NbmPressureVariable: PressureVariableRespresentable, GenericVariable, Has
     let level: Int
 
     var storePreviousForecast: Bool {
-        return false
-    }
-
-    var requiresOffsetCorrectionForMixing: Bool {
         return false
     }
 

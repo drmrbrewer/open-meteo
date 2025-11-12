@@ -76,17 +76,6 @@ enum CmaSurfaceVariable: String, CaseIterable, GenericVariableMixable, CmaVariab
         }
     }
 
-    var requiresOffsetCorrectionForMixing: Bool {
-        switch self {
-        case .soil_moisture_0_to_10cm: return true
-        case .soil_moisture_10_to_40cm: return true
-        case .soil_moisture_40_to_100cm: return true
-        case .soil_moisture_100_to_200cm: return true
-        case .snow_depth: return true
-        default: return false
-        }
-    }
-
     var multiplyAdd: (multiply: Float, add: Float)? {
         switch self {
         case .temperature_2m, .surface_temperature, .soil_temperature_0_to_10cm, .soil_temperature_10_to_40cm, .soil_temperature_40_to_100cm, .soil_temperature_100_to_200cm:
@@ -243,7 +232,7 @@ enum CmaSurfaceVariable: String, CaseIterable, GenericVariableMixable, CmaVariab
         case .showers:
             return .backwards_sum
         case .wind_gusts_10m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .shortwave_radiation:
             return .solar_backwards_averaged
         case .cape:
@@ -350,10 +339,6 @@ struct CmaPressureVariable: PressureVariableRespresentable, Hashable, GenericVar
     let level: Int
 
     var storePreviousForecast: Bool {
-        return false
-    }
-
-    var requiresOffsetCorrectionForMixing: Bool {
         return false
     }
 

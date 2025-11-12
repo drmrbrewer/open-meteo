@@ -80,47 +80,49 @@ extension VariablePerMemberStorage {
         }
         return nil
     }
+    
+    /// Get 3 variables at once and remove them from storage
+    func getThreeRemoving(first: V, second: V, third: V, timestamp: Timestamp) -> (first: Array2D, second: Array2D, third: Array2D, member: Int)? {
+        for key in data.keys {
+            guard
+                key.variable == first,
+                key.timestamp == timestamp,
+                let secondKey = data.first(where: {$0.key.variable == second && $0.key.timestamp == timestamp && $0.key.member == key.member})?.key,
+                let thirdKey = data.first(where: {$0.key.variable == third && $0.key.timestamp == timestamp && $0.key.member == key.member})?.key,
+                let firstData = data.removeValue(forKey: key),
+                let secondData = data.removeValue(forKey: secondKey),
+                let thirdData = data.removeValue(forKey: thirdKey)
+            else {
+                continue
+            }
+            return (firstData, secondData, thirdData, key.member)
+        }
+        return nil
+    }
+    
+    /// Get 4 variables at once and remove them from storage
+    func getFourRemoving(first: V, second: V, third: V, forth: V, timestamp: Timestamp) -> (first: Array2D, second: Array2D, third: Array2D, forth: Array2D, member: Int)? {
+        for key in data.keys {
+            guard
+                key.variable == first,
+                key.timestamp == timestamp,
+                let secondKey = data.first(where: {$0.key.variable == second && $0.key.timestamp == timestamp && $0.key.member == key.member})?.key,
+                let thirdKey = data.first(where: {$0.key.variable == third && $0.key.timestamp == timestamp && $0.key.member == key.member})?.key,
+                let forthKey = data.first(where: {$0.key.variable == forth && $0.key.timestamp == timestamp && $0.key.member == key.member})?.key,
+                let firstData = data.removeValue(forKey: key),
+                let secondData = data.removeValue(forKey: secondKey),
+                let thirdData = data.removeValue(forKey: thirdKey),
+                let forthData = data.removeValue(forKey: forthKey)
+            else {
+                continue
+            }
+            return (firstData, secondData, thirdData, forthData, key.member)
+        }
+        return nil
+    }
 }
 
 extension VariablePerMemberStorage {
-    /// Calculate wind speed and direction from U/V components for all available members for all timesteps
-    /// if `trueNorth` is given, correct wind direction due to rotated grid projections. E.g. DMI HARMONIE AROME using LambertCC
-    /// Removes processed variables from `self.data`
-    nonisolated func calculateWindSpeed(u: V, v: V, outSpeedVariable: GenericVariable, outDirectionVariable: GenericVariable?, writer: OmSpatialMultistepWriter, trueNorth: [Float]? = nil) async throws {
-        // Note: A for loop + remove is not thread safe due to reentrance issues
-        while let (u, v, timestamp, member) = await getTwoRemoving(first: u, second: v) {
-            let speed = zip(u.data, v.data).map(Meteorology.windspeed)
-            try await writer.write(time: timestamp, member: member, variable: outSpeedVariable, data: speed)
-
-            if let outDirectionVariable {
-                var direction = Meteorology.windirectionFast(u: u.data, v: v.data)
-                if let trueNorth {
-                    direction = zip(direction, trueNorth).map({ ($0 - $1 + 360).truncatingRemainder(dividingBy: 360) })
-                }
-                try await writer.write(time: timestamp, member: member, variable: outDirectionVariable, data: direction)
-            }
-        }
-    }
-    
-    /// Calculate wind speed and direction from U/V components for all available members for the timestep in writer
-    /// if `trueNorth` is given, correct wind direction due to rotated grid projections. E.g. DMI HARMONIE AROME using LambertCC
-    /// Removes processed variables from `self.data`
-    nonisolated func calculateWindSpeed(u: V, v: V, outSpeedVariable: GenericVariable, outDirectionVariable: GenericVariable?, writer: OmSpatialTimestepWriter, trueNorth: [Float]? = nil) async throws {
-        // Note: A for loop + remove is not thread safe due to reentrance issues
-        while let (u, v, member) = await getTwoRemoving(first: u, second: v, timestamp: writer.time) {
-            let speed = zip(u.data, v.data).map(Meteorology.windspeed)
-            try await writer.write(member: member, variable: outSpeedVariable, data: speed)
-
-            if let outDirectionVariable {
-                var direction = Meteorology.windirectionFast(u: u.data, v: v.data)
-                if let trueNorth {
-                    direction = zip(direction, trueNorth).map({ ($0 - $1 + 360).truncatingRemainder(dividingBy: 360) })
-                }
-                try await writer.write(member: member, variable: outDirectionVariable, data: direction)
-            }
-        }
-    }
-
     /// Generate elevation file
     /// - `elevation`: in metres
     /// - `landMask` 0 = sea, 1 = land. Fractions below 0.5 are considered sea.
@@ -198,17 +200,10 @@ extension VariablePerMemberStorage {
     }
     
     /// Sum up rain, snow and graupel for total precipitation
-    func calculatePrecip(tgrp: V, tirf: V, tsnowp: V, outVariable: GenericVariable, writer: OmSpatialTimestepWriter) async throws {
-        for (t, handles) in self.data.groupedPreservedOrder(by: { $0.key.timestampAndMember }) {
-            guard
-                t.timestamp == writer.time,
-                let tgrp = handles.first(where: { $0.key.variable == tgrp }),
-                let tsnowp = handles.first(where: { $0.key.variable == tsnowp }),
-                let tirf = handles.first(where: { $0.key.variable == tirf }) else {
-                continue
-            }
-            let precip = zip(tgrp.value.data, zip(tsnowp.value.data, tirf.value.data)).map({ $0 + $1.0 + $1.1 })
-            try await writer.write(member: t.member, variable: outVariable, data: precip)
+    nonisolated func calculatePrecip(tgrp: V, tirf: V, tsnowp: V, outVariable: GenericVariable, writer: OmSpatialTimestepWriter) async throws {
+        while let (tgrp, tsnowp, tirf, member) = await getThreeRemoving(first: tgrp, second: tsnowp, third: tirf, timestamp: writer.time) {
+            let precip = zip(tgrp.data, zip(tsnowp.data, tirf.data)).map({ $0 + $1.0 + $1.1 })
+            try await writer.write(member: member, variable: outVariable, data: precip)
         }
     }
     
@@ -228,15 +223,31 @@ extension VariablePerMemberStorage {
         }
     }
     
-    /// Calculate relative humidity. Removes dew-point from storage afterwards
-    nonisolated func calculateRelativeHumidity(temperature: V, dewpoint: V, outVariable: GenericVariable, writer: OmSpatialTimestepWriter) async throws {
-        // Note: A for loop + remove is not thread safe due to reentrance issues
-        while
-            let t2m = await data.first(where: {$0.key.variable == temperature && $0.key.timestamp == writer.time}),
-            let dewpoint = await remove(variable: dewpoint, timestamp: writer.time, member: t2m.key.member)
-        {
-            let rh = zip(t2m.value.data, dewpoint.data).map(Meteorology.relativeHumidity)
-            try await writer.write(member: t2m.key.member, variable: outVariable, data: rh)
+    /// Calculate snow water equivalent from snow height and liquid ratio. Limit to precipitation amount. If domain elevation is higher than snowfall height, set snowfall amount to snow
+    nonisolated func calculateSnowfallWaterEquivalent(snowfall: V, liquidRatio: V, precipitation: V, snowfallHeight: V, domainElevation: [Float], outVariable: GenericVariable, writer: OmSpatialTimestepWriter) async throws {
+        while let (snowfall, liquidRatio, precipitation, snowfallHeight, member) = await getFourRemoving(first: snowfall, second: liquidRatio, third: precipitation, forth: snowfallHeight, timestamp: writer.time) {
+            let waterEquivalent = zip(zip(snowfall.data, zip(snowfallHeight.data, domainElevation)), zip(liquidRatio.data, precipitation.data)).map({
+                let liquidRatio = $1.0
+                let precipitation = $1.1
+                let snowfall = $0.0
+                let snowfallHeight = $0.1.0
+                let domainElevation = $0.1.1
+                if snowfallHeight + 200 < domainElevation {
+                    return precipitation
+                }
+                return liquidRatio <= 0 ? 0 : min(snowfall / liquidRatio * 10, precipitation)
+            })
+            try await writer.write(member: member, variable: outVariable, data: waterEquivalent)
+        }
+    }
+    
+    /// Calculate snow depth from snow depth water equivalent and snow density. Removes both after use.
+    /// Expects water equivalent in mm
+    /// Density in kg/m3
+    nonisolated func calculateSnowDepth(density: V, waterEquivalent: V, outVariable: GenericVariable, writer: OmSpatialTimestepWriter) async throws {
+        while let (density, water, member) = await getTwoRemoving(first: density, second: waterEquivalent, timestamp: writer.time) {
+            let height = zip(water.data, density.data).map(/)
+            try await writer.write(member: member, variable: outVariable, data: height)
         }
     }
 }

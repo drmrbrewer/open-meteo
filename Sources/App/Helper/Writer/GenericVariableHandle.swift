@@ -213,9 +213,8 @@ struct GenericVariableHandle: Sendable {
             try await handles
                 .filter({ onlyGeneratePreviousDays == false || $0.variable.storePreviousForecast })
                 .groupedPreservedOrder(by: { "\($0.variable.omFileName.file)" })
-                .evenlyChunked(in: concurrent)
                 .foreachConcurrent(nConcurrent: concurrent, body: {
-                    try await convertSerial3D(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: $0.flatMap { $0.values }, onlyGeneratePreviousDays: onlyGeneratePreviousDays, compression: compression)
+                    try await convertSerial3D(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: $0.values, onlyGeneratePreviousDays: onlyGeneratePreviousDays, compression: compression)
             })
         } else {
             try await convertSerial3D(logger: logger, domain: domain, createNetcdf: createNetcdf, run: run, handles: handles, onlyGeneratePreviousDays: onlyGeneratePreviousDays, compression: compression)
@@ -245,7 +244,8 @@ struct GenericVariableHandle: Sendable {
             }
             /// `timeMinMax.min.time` has issues with `skip`
             /// Start time (timeMinMax.min) might be before run time in case of MF wave which contains hind-cast data
-            let startTime = min(run ?? timeMin, timeMin)
+            /// For weekly and monthly data, always use timeMin instead of run
+            let startTime = dtSeconds >= 7*24*3600 ? timeMin : min(run ?? timeMin, timeMin)
             let time = TimerangeDt(range: startTime..<timeMax, dtSeconds: dtSeconds)
 
             let variable = handles[0].variable

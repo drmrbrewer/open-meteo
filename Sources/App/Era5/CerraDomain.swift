@@ -22,8 +22,6 @@ enum CerraVariableDerived: String, RawRepresentableString, GenericVariableMixabl
     case weathercode
     case weather_code
     case is_day
-    case terrestrial_radiation
-    case terrestrial_radiation_instant
     case shortwave_radiation_instant
     case diffuse_radiation_instant
     case direct_radiation_instant
@@ -41,10 +39,6 @@ enum CerraVariableDerived: String, RawRepresentableString, GenericVariableMixabl
     case cloud_cover_mid
     case cloud_cover_high
     case sunshine_duration
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
 }
 
 struct CerraReader: GenericReaderDerivedSimple, GenericReaderProtocol {
@@ -124,10 +118,6 @@ struct CerraReader: GenericReaderDerivedSimple, GenericReaderProtocol {
             try await prefetchData(raw: .precipitation, time: time)
             try await prefetchData(derived: .snowfall, time: time)
         case .is_day:
-            break
-        case .terrestrial_radiation:
-            break
-        case .terrestrial_radiation_instant:
             break
         case .shortwave_radiation_instant:
             try await prefetchData(raw: .shortwave_radiation, time: time)
@@ -246,12 +236,6 @@ struct CerraReader: GenericReaderDerivedSimple, GenericReaderProtocol {
            )
         case .is_day:
             return DataAndUnit(Zensun.calculateIsDay(timeRange: time.time, lat: reader.modelLat, lon: reader.modelLon), .dimensionlessInteger)
-        case .terrestrial_radiation:
-            let solar = Zensun.extraTerrestrialRadiationBackwards(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
-        case .terrestrial_radiation_instant:
-            let solar = Zensun.extraTerrestrialRadiationInstant(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
         case .shortwave_radiation_instant:
             let sw = try await get(raw: .shortwave_radiation, time: time)
             let factor = Zensun.backwardsAveragedToInstantFactor(time: time.time, latitude: reader.modelLat, longitude: reader.modelLon)
@@ -361,15 +345,15 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .temperature_2m:
             return .hermite(bounds: nil)
         case .wind_speed_10m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .wind_direction_10m:
             return .linearDegrees
         case .wind_speed_100m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .wind_direction_100m:
             return .linearDegrees
         case .wind_gusts_10m:
-            return .hermite(bounds: nil)
+            return .hermite(bounds: 0...10e9)
         case .relative_humidity_2m:
             return .hermite(bounds: 0...100)
         case .cloud_cover_low:
@@ -393,10 +377,6 @@ enum CerraVariable: String, CaseIterable, GenericVariable {
         case .snow_depth, .snow_depth_water_equivalent:
             return .linear
         }
-    }
-
-    var requiresOffsetCorrectionForMixing: Bool {
-         return false
     }
 
     /// Name used to query the ECMWF CDS API via python

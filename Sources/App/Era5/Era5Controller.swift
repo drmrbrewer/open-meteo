@@ -41,8 +41,6 @@ enum Era5VariableDerived: String, RawRepresentableString, GenericVariableMixable
     case soil_moisture_index_100_to_255cm
     case soil_moisture_index_0_to_100cm
     case is_day
-    case terrestrial_radiation
-    case terrestrial_radiation_instant
     case shortwave_radiation_instant
     case diffuse_radiation_instant
     case direct_radiation_instant
@@ -59,10 +57,6 @@ enum Era5VariableDerived: String, RawRepresentableString, GenericVariableMixable
     case wind_direction_10m_spread
     case wind_direction_100m_spread
     case snowfall_spread
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
 }
 
 enum Era5Factory {
@@ -228,10 +222,6 @@ struct Era5Reader<Reader: GenericReaderProtocol>: GenericReaderDerivedSimple, Ge
         case .soil_moisture_index_0_to_100cm:
             try await prefetchData(derived: .soil_moisture_0_to_100cm, time: time)
         case .is_day:
-            break
-        case .terrestrial_radiation:
-            break
-        case .terrestrial_radiation_instant:
             break
         case .shortwave_radiation_instant:
             try await prefetchData(raw: .shortwave_radiation, time: time)
@@ -451,12 +441,6 @@ struct Era5Reader<Reader: GenericReaderProtocol>: GenericReaderDerivedSimple, Ge
             return DataAndUnit(type.calculateSoilMoistureIndex(soilMoisture.data), .fraction)
         case .is_day:
             return DataAndUnit(Zensun.calculateIsDay(timeRange: time.time, lat: reader.modelLat, lon: reader.modelLon), .dimensionlessInteger)
-        case .terrestrial_radiation:
-            let solar = Zensun.extraTerrestrialRadiationBackwards(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
-        case .terrestrial_radiation_instant:
-            let solar = Zensun.extraTerrestrialRadiationInstant(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-            return DataAndUnit(solar, .wattPerSquareMetre)
         case .shortwave_radiation_instant:
             let sw = try await get(raw: .shortwave_radiation, time: time)
             let factor = Zensun.backwardsAveragedToInstantFactor(time: time.time, latitude: reader.modelLat, longitude: reader.modelLon)

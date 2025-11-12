@@ -39,8 +39,6 @@ enum GfsVariableDerivedSurface: String, CaseIterable, GenericVariableMixable {
     case snowfall
     case rain
     case surface_pressure
-    case terrestrial_radiation
-    case terrestrial_radiation_instant
     case weathercode
     case weather_code
     case is_day
@@ -56,10 +54,6 @@ enum GfsVariableDerivedSurface: String, CaseIterable, GenericVariableMixable {
     case mass_density_8m
 
     case sunshine_duration
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
 }
 
 /**
@@ -82,10 +76,6 @@ enum GfsPressureVariableDerivedType: String, CaseIterable {
 struct GfsPressureVariableDerived: PressureVariableRespresentable, GenericVariableMixable {
     let variable: GfsPressureVariableDerivedType
     let level: Int
-
-    var requiresOffsetCorrectionForMixing: Bool {
-        return false
-    }
 }
 
 /// Read GFS domains and perform domain specific corrections
@@ -278,10 +268,6 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
             case .surface_pressure:
                 try await prefetchData(raw: .surface(.pressure_msl), time: time)
                 try await prefetchData(raw: .surface(.temperature_2m), time: time)
-            case .terrestrial_radiation:
-                break
-            case .terrestrial_radiation_instant:
-                break
             case .dew_point_2m, .dewpoint_2m:
                 try await prefetchData(raw: .surface(.temperature_2m), time: time)
                 try await prefetchData(raw: .surface(.relative_humidity_2m), time: time)
@@ -433,12 +419,6 @@ struct GfsReader: GenericReaderDerived, GenericReaderProtocol {
                 let temperature = try await get(raw: .surface(.temperature_2m), time: time).data
                 let pressure_msl = try await get(raw: .surface(.pressure_msl), time: time)
                 return DataAndUnit(Meteorology.surfacePressure(temperature: temperature, pressure: pressure_msl.data, elevation: reader.targetElevation), pressure_msl.unit)
-            case .terrestrial_radiation:
-                let solar = Zensun.extraTerrestrialRadiationBackwards(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-                return DataAndUnit(solar, .wattPerSquareMetre)
-            case .terrestrial_radiation_instant:
-                let solar = Zensun.extraTerrestrialRadiationInstant(latitude: reader.modelLat, longitude: reader.modelLon, timerange: time.time)
-                return DataAndUnit(solar, .wattPerSquareMetre)
             case .dew_point_2m, .dewpoint_2m:
                 let temperature = try await get(raw: .surface(.temperature_2m), time: time)
                 let rh = try await get(raw: .surface(.relative_humidity_2m), time: time)

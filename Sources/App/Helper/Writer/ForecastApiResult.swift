@@ -9,7 +9,7 @@ protocol FlatBuffersVariable: RawRepresentableString {
 
 protocol ForecastapiResponder {
     func calculateQueryWeight(nVariablesModels: Int?) -> Float
-    func response(format: ForecastResultFormat?, timestamp: Timestamp, fixedGenerationTime: Double?, concurrencySlot: Int?) async throws -> Response
+    func response(format: ForecastResultFormatWithOptions?, concurrencySlot: Int?) async throws -> Response
 
     var numberOfLocations: Int { get }
 }
@@ -17,6 +17,7 @@ protocol ForecastapiResponder {
 protocol ModelFlatbufferSerialisable {
     associatedtype HourlyVariable: FlatBuffersVariable
     associatedtype DailyVariable: FlatBuffersVariable
+    associatedtype WeeklyVariable: FlatBuffersVariable
     associatedtype MonthlyVariable: FlatBuffersVariable
 
     /// 0=all members start at control, 1=Members start at `member01` (Used in CFSv2)
@@ -24,33 +25,33 @@ protocol ModelFlatbufferSerialisable {
 
     var flatBufferModel: openmeteo_sdk_Model { get }
     var modelName: String {get}
-    
-    
+
+
     var latitude: Float { get }
     var longitude: Float { get }
 
     /// Desired elevation from a DEM. Used in statistical downscaling
     var elevation: Float? { get }
 
-    func prefetch(currentVariables: [HourlyVariable]?, minutely15Variables: [HourlyVariable]?, hourlyVariables: [HourlyVariable]?, sixHourlyVariables: [HourlyVariable]?, dailyVariables: [DailyVariable]?, monthlyVariables: [MonthlyVariable]?) async throws -> Void
-    
+    func prefetch(currentVariables: [HourlyVariable]?, minutely15Variables: [HourlyVariable]?, hourlyVariables: [HourlyVariable]?, dailyVariables: [DailyVariable]?, weeklyVariables: [WeeklyVariable]?, monthlyVariables: [MonthlyVariable]?) async throws -> Void
+
     func current(variables: [HourlyVariable]?) async throws -> ApiSectionSingle<HourlyVariable>?
     func hourly(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>?
-    func sixHourly(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>?
     func minutely15(variables: [HourlyVariable]?) async throws -> ApiSection<HourlyVariable>?
     func daily(variables: [DailyVariable]?) async throws -> ApiSection<DailyVariable>?
     func monthly(variables: [MonthlyVariable]?) async throws -> ApiSection<MonthlyVariable>?
+    func weekly(variables: [WeeklyVariable]?) async throws -> ApiSection<WeeklyVariable>?
 }
 
 struct FlatBuffersVariableNone: FlatBuffersVariable {
     func getFlatBuffersMeta() -> FlatBufferVariableMeta {
         return FlatBufferVariableMeta(variable: .undefined)
     }
-    
+
     init?(rawValue: String) {
         return nil
     }
-    
+
     var rawValue: String {
         return "undefined"
     }
@@ -61,7 +62,7 @@ extension ModelFlatbufferSerialisable {
     static var memberOffset: Int {
         return 0
     }
-    
+
     /// e.g. `52.52N13.42E38m`
     var formatedCoordinatesFilename: String {
         let lat = latitude < 0 ? String(format: "%.2fS", abs(latitude)) : String(format: "%.2fN", latitude)
@@ -82,23 +83,23 @@ struct ForecastapiResult<Model: ModelFlatbufferSerialisable>: ForecastapiRespond
 
     /// Number of variables times number of somains. Used to rate limiting
     let nVariablesTimesDomains: Int
-    
+
     struct RequestVariables {
         let currentVariables: [Model.HourlyVariable]?
         let minutely15Variables: [Model.HourlyVariable]?
         let hourlyVariables: [Model.HourlyVariable]?
-        let sixHourlyVariables: [Model.HourlyVariable]?
         let dailyVariables: [Model.DailyVariable]?
+        let weeklyVariables: [Model.WeeklyVariable]?
         let monthlyVariables: [Model.MonthlyVariable]?
     }
     let variables: RequestVariables
 
 
-    init(timeformat: Timeformat, results: [PerLocation], currentVariables: [Model.HourlyVariable]?, minutely15Variables: [Model.HourlyVariable]?, hourlyVariables: [Model.HourlyVariable]?, sixHourlyVariables: [Model.HourlyVariable]?, dailyVariables: [Model.DailyVariable]?, monthlyVariables: [Model.MonthlyVariable]?, nVariablesTimesDomains: Int = 1) {
+    init(timeformat: Timeformat, results: [PerLocation], currentVariables: [Model.HourlyVariable]?, minutely15Variables: [Model.HourlyVariable]?, hourlyVariables: [Model.HourlyVariable]?, dailyVariables: [Model.DailyVariable]?, weeklyVariables: [Model.WeeklyVariable]?, monthlyVariables: [Model.MonthlyVariable]?, nVariablesTimesDomains: Int = 1) {
         self.timeformat = timeformat
         self.results = results
         self.nVariablesTimesDomains = nVariablesTimesDomains
-        self.variables = RequestVariables(currentVariables: currentVariables, minutely15Variables: minutely15Variables, hourlyVariables: hourlyVariables, sixHourlyVariables: sixHourlyVariables, dailyVariables: dailyVariables, monthlyVariables: monthlyVariables)
+        self.variables = RequestVariables(currentVariables: currentVariables, minutely15Variables: minutely15Variables, hourlyVariables: hourlyVariables, dailyVariables: dailyVariables, weeklyVariables: weeklyVariables, monthlyVariables: monthlyVariables)
     }
 
     struct PerLocation {
@@ -115,9 +116,9 @@ struct ForecastapiResult<Model: ModelFlatbufferSerialisable>: ForecastapiRespond
             return [
                 try await minutely15(variables: variables.minutely15Variables),
                 try await hourly(variables: variables.hourlyVariables),
-                try await sixHourly(variables: variables.sixHourlyVariables),
                 try await daily(variables: variables.dailyVariables),
-                try await monthly(variables: variables.monthlyVariables),
+                try await weekly(variables: variables.weeklyVariables),
+                try await monthly(variables: variables.monthlyVariables)
             ].compactMap({ $0 })
         }
 
@@ -166,18 +167,6 @@ struct ForecastapiResult<Model: ModelFlatbufferSerialisable>: ForecastapiRespond
             })
             return try run.merge()
         }
-        func sixHourly(variables: [Model.HourlyVariable]?) async throws -> ApiSectionString? {
-            guard let variables else {
-                return nil
-            }
-            let run: [ApiSectionString] = try await results.asyncCompactMap({ perModel -> ApiSectionString? in
-                guard let h = try await perModel.sixHourly(variables: variables) else {
-                    return nil
-                }
-                return h.toApiSectionString(memberOffset: Model.memberOffset, model: results.count > 1 ? perModel : nil)
-            })
-            return try run.merge()
-        }
         func minutely15(variables: [Model.HourlyVariable]?) async throws -> ApiSectionString? {
             guard let variables else {
                 return nil
@@ -190,7 +179,19 @@ struct ForecastapiResult<Model: ModelFlatbufferSerialisable>: ForecastapiRespond
             })
             return try run.merge()
         }
-        
+
+        func weekly(variables: [Model.WeeklyVariable]?) async throws -> ApiSectionString? {
+            guard let variables else {
+                return nil
+            }
+            let run: [ApiSectionString] = try await results.asyncCompactMap({ perModel -> ApiSectionString? in
+                guard let h = try await perModel.weekly(variables: variables) else {
+                    return nil
+                }
+                return h.toApiSectionString(memberOffset: Model.memberOffset, model: results.count > 1 ? perModel : nil)
+            })
+            return try run.merge()
+        }
         func monthly(variables: [Model.MonthlyVariable]?) async throws -> ApiSectionString? {
             guard let variables else {
                 return nil
@@ -207,23 +208,33 @@ struct ForecastapiResult<Model: ModelFlatbufferSerialisable>: ForecastapiRespond
 
     /// Output the given result set with a specified format
     /// timestamp and fixedGenerationTime are used to overwrite dynamic fields in unit tests
-    func response(format: ForecastResultFormat?, timestamp: Timestamp = .now(), fixedGenerationTime: Double? = nil, concurrencySlot: Int? = nil) async throws -> Response {
-        if format == .xlsx && results.count > 100 {
+    func response(format: ForecastResultFormatWithOptions?, concurrencySlot: Int? = nil) async throws -> Response {
+        if case .xlsx = format, results.count > 100 {
             throw ForecastApiError.generic(message: "XLSX supports only up to 100 locations")
         }
         for location in results {
             for model in location.results {
-                try await model.prefetch(currentVariables: variables.currentVariables, minutely15Variables: variables.minutely15Variables, hourlyVariables: variables.hourlyVariables, sixHourlyVariables: variables.sixHourlyVariables, dailyVariables: variables.dailyVariables, monthlyVariables: variables.monthlyVariables)
+                try await model.prefetch(currentVariables: variables.currentVariables, minutely15Variables: variables.minutely15Variables, hourlyVariables: variables.hourlyVariables, dailyVariables: variables.dailyVariables, weeklyVariables: variables.weeklyVariables, monthlyVariables: variables.monthlyVariables)
             }
         }
-        switch format ?? .json {
-        case .json:
+        switch format ?? .json() {
+        case .json(let fixedGenerationTime):
             return try toJsonResponse(fixedGenerationTime: fixedGenerationTime, concurrencySlot: concurrencySlot)
-        case .xlsx:
-            return try await toXlsxResponse(timestamp: timestamp)
-        case .csv:
-            return try toCsvResponse(concurrencySlot: concurrencySlot)
-        case .flatbuffers:
+        case .xlsx(let timestamp, let locationInformation):
+            switch locationInformation {
+            case .omit:
+                return try await toXlsxResponse(timestamp: timestamp, withLocationHeader: false)
+            case .section:
+                return try await toXlsxResponse(timestamp: timestamp, withLocationHeader: true)
+            }
+        case .csv(let locationInformation):
+            switch locationInformation {
+                case .omit:
+                    return try toCsvResponse(concurrencySlot: concurrencySlot, withLocationHeader: false)
+                case .section:
+                    return try toCsvResponse(concurrencySlot: concurrencySlot, withLocationHeader: true)
+            }
+        case .flatbuffers(let fixedGenerationTime):
             return try toFlatbuffersResponse(fixedGenerationTime: fixedGenerationTime, concurrencySlot: concurrencySlot)
         }
     }
@@ -342,12 +353,22 @@ extension Array where Element == ApiSectionString {
     }
 }
 
-
 enum ForecastResultFormat: String, Codable {
     case json
     case xlsx
     case csv
     case flatbuffers
+
+}
+
+enum ForecastResultFormatWithOptions {
+    /// fixedGenerationTime is used to overwrite dynamic fields in unit tests
+    case json(fixedGenerationTime: Double? = nil)
+    /// timestamp is used to overwrite dynamic fields in unit tests
+    case xlsx(timestamp: Timestamp = .now(), locationInformation: OutputLocationInformation = .section)
+    case csv(locationInformation: OutputLocationInformation = .section)
+    /// fixedGenerationTime is used to overwrite dynamic fields in unit tests
+    case flatbuffers(fixedGenerationTime: Double? = nil)
 }
 
 /// Simplify flush commands
