@@ -64,13 +64,13 @@ enum GfsGraphCastSurfaceVariable: String, CaseIterable, GenericVariableMixable, 
         case .temperature_2m:
             return .hermite(bounds: nil)
         case .cloud_cover:
-            return .linear
+            return .hermite(bounds: 0...100)
         case .cloud_cover_low:
-            return .linear
+            return .hermite(bounds: 0...100)
         case .cloud_cover_mid:
-            return .linear
+            return .hermite(bounds: 0...100)
         case .cloud_cover_high:
-            return .linear
+            return .hermite(bounds: 0...100)
         case .pressure_msl:
             return .hermite(bounds: nil)
         case .precipitation:
@@ -106,6 +106,23 @@ enum GfsGraphCastSurfaceVariable: String, CaseIterable, GenericVariableMixable, 
     }
 }
 
+
+extension VariableOrSpread: GfsGraphCastVariableDownloadable where Variable: GfsGraphCastVariableDownloadable {
+    var multiplyAdd: (multiply: Float, add: Float)? {
+        if let variable = variable as? GfsGraphCastSurfaceVariable {
+            switch variable {
+            case .pressure_msl:
+                return (1 / 100, 0)
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+}
+
+
+
 /**
  Types of pressure level variables
  */
@@ -116,7 +133,6 @@ enum GfsGraphCastPressureVariableType: String, CaseIterable {
     case geopotential_height
     case vertical_velocity
     case relative_humidity
-    case specific_humdity
 }
 
 /**
@@ -134,8 +150,8 @@ struct GfsGraphCastPressureVariable: PressureVariableRespresentable, Hashable, G
         switch variable {
         case .temperature:
             return (1, -273.15)
-        case .specific_humdity:
-            return (1000, 0)
+        case .relative_humidity:
+            return (1000, 0) // specific humidity is downloaded. this scaled kg to g
         default:
             return nil
         }
@@ -160,8 +176,6 @@ struct GfsGraphCastPressureVariable: PressureVariableRespresentable, Hashable, G
             return (0.2..<1).interpolated(atFraction: (0..<800).fraction(of: Float(level)))
         case .vertical_velocity:
             return (20..<100).interpolated(atFraction: (0..<500).fraction(of: Float(level)))
-        case .specific_humdity:
-            fatalError("should never be written to disk")
         }
     }
 
@@ -178,8 +192,6 @@ struct GfsGraphCastPressureVariable: PressureVariableRespresentable, Hashable, G
         case .relative_humidity:
             return .hermite(bounds: 0...100)
         case .vertical_velocity:
-            return .hermite(bounds: nil)
-        case .specific_humdity:
             return .hermite(bounds: nil)
         }
     }
@@ -198,8 +210,6 @@ struct GfsGraphCastPressureVariable: PressureVariableRespresentable, Hashable, G
             return .percentage
         case .vertical_velocity:
             return .metrePerSecondNotUnitConverted
-        case .specific_humdity:
-            return .gramPerKilogram
         }
     }
 

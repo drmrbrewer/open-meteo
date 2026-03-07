@@ -11,7 +11,9 @@ enum DomainRegistry: String, CaseIterable {
     case meteofrance_arome_france_hd_15min
     case meteofrance_arpege_europe
     case meteofrance_arpege_world025
+    /// Deprecated 2026-01-18. MeteoFrance does not provide this data anymore
     case meteofrance_arpege_europe_probabilities
+    /// Deprecated 2026-01-18. MeteoFrance does not provide this data anymore
     case meteofrance_arpege_world025_probabilities
     case meteofrance_wave
     case meteofrance_currents
@@ -54,6 +56,11 @@ enum DomainRegistry: String, CaseIterable {
     case ncep_nbm_conus
     case ncep_nbm_alaska
     case ncep_nam_conus
+    case ncep_aigefs025
+    case ncep_aigfs025
+    case ncep_hgefs025_ensemble_mean
+    case ncep_aigefs025_ensemble_mean
+    
 
     case glofas_consolidated_v4
     case glofas_consolidated_v3
@@ -73,6 +80,7 @@ enum DomainRegistry: String, CaseIterable {
     case dwd_icon_d2_eps
     case dwd_ewam
     case dwd_gwam
+    case dwd_sis_europe_africa_v4
 
     case ecmwf_ifs
     case ecmwf_ifs04
@@ -82,21 +90,26 @@ enum DomainRegistry: String, CaseIterable {
     case ecmwf_aifs025
     case ecmwf_aifs025_single
     case ecmwf_aifs025_ensemble
+    case ecmwf_wam
     case ecmwf_wam025
     case ecmwf_wam025_ensemble
     case ecmwf_ifs_analysis
     case ecmwf_ifs_analysis_long_window
     case ecmwf_ifs_long_window
     case ecmwf_seas5
+    case ecmwf_seas5_ensemble_mean
     case ecmwf_seas5_12hourly
     case ecmwf_seas5_daily
+    case ecmwf_seas5_daily_ensemble_mean
     case ecmwf_seas5_monthly_upper_level
     case ecmwf_seas5_monthly
     case ecmwf_ec46
+    case ecmwf_ec46_ensemble_mean
     case ecmwf_ec46_weekly
 
     case jma_msm
     case jma_gsm
+    case jma_msm_upper_level
 
     case metno_nordic_pp
 
@@ -166,6 +179,32 @@ enum DomainRegistry: String, CaseIterable {
         }
         return "\(remote)\(rawValue)/".replacingOccurrences(of: "data/", with: "data_run/")
     }
+    
+    /// Instead of generating time chunks, use a single rolling files and retain a certain number of days inside
+    var useRollingDays: Int? {
+        switch self {
+        case .ecmwf_ifs025_ensemble, .ecmwf_aifs025_ensemble, .ecmwf_wam025_ensemble:
+            return 3
+        case .dwd_icon_eps, .dwd_icon_d2_eps, .dwd_icon_eu_eps:
+            return 3
+        case .ncep_gefs05, .ncep_gefs025, .ncep_aigefs025, .ncep_gefswave025:
+            return 3
+        case .cmc_gem_geps:
+            return 3
+        case .ukmo_global_ensemble_20km, .ukmo_uk_ensemble_2km:
+            return 3
+        case .bom_access_global_ensemble:
+            return 3
+        case .meteoswiss_icon_ch1_ensemble, .meteoswiss_icon_ch2_ensemble:
+            return 3
+        case .ecmwf_ec46:
+            return 31
+        case .ecmwf_seas5, .ecmwf_seas5_daily, .ecmwf_seas5_12hourly:
+            return 0
+        default:
+            return nil
+        }
+    }
 
     func getDomain() -> GenericDomain? {
         switch self {
@@ -196,7 +235,9 @@ enum DomainRegistry: String, CaseIterable {
         case .copernicus_dem90:
             return Dem90()
         case .ecmwf_ifs:
-            return CdsDomain.ecmwf_ifs
+            return EcmwfEcpdsDomain.ifs
+        case .ecmwf_wam:
+            return EcmwfEcpdsDomain.wam
         case .ecmwf_ifs_analysis_long_window:
             return CdsDomain.ecmwf_ifs_analysis_long_window
         case .ecmwf_ifs_analysis:
@@ -227,6 +268,10 @@ enum DomainRegistry: String, CaseIterable {
             return GfsDomain.gfs013
         case .ncep_gfs025:
             return GfsDomain.gfs025
+        case .ncep_aigfs025:
+            return GfsGraphCastDomain.aigfs025
+        case .ncep_aigefs025:
+            return GfsGraphCastDomain.aigefs025
         case .ncep_gefs025:
             return GfsDomain.gfs025_ens
         case .ncep_gefs05:
@@ -301,6 +346,8 @@ enum DomainRegistry: String, CaseIterable {
             return EcmwfSeasDomain.ec46_weekly
         case .jma_msm:
             return JmaDomain.msm
+        case .jma_msm_upper_level:
+            return JmaDomain.msm_upper_level
         case .ncep_cfsv2:
             return nil
         case .metno_nordic_pp:
@@ -340,6 +387,10 @@ enum DomainRegistry: String, CaseIterable {
             return nil
         case .ncep_gfs_graphcast025:
             return GfsGraphCastDomain.graphcast025
+        case .ncep_hgefs025_ensemble_mean:
+            return GfsGraphCastDomain.hgefs025_ensemble_mean
+        case .ncep_aigefs025_ensemble_mean:
+            return GfsGraphCastDomain.aigefs025_ensemble_mean
         case .ecmwf_wam025:
             return EcmwfDomain.wam025
         case .ecmwf_wam025_ensemble:
@@ -404,6 +455,14 @@ enum DomainRegistry: String, CaseIterable {
             return MeteoSwissDomain.icon_ch1_ensemble
         case .meteoswiss_icon_ch2_ensemble:
             return MeteoSwissDomain.icon_ch2_ensemble
+        case .ecmwf_seas5_ensemble_mean:
+            return EcmwfSeasDomain.seas5_ensemble_mean
+        case .ecmwf_seas5_daily_ensemble_mean:
+            return EcmwfSeasDomain.seas5_daily_ensemble_mean
+        case .ecmwf_ec46_ensemble_mean:
+            return EcmwfSeasDomain.ec46_ensemble_mean
+        case .dwd_sis_europe_africa_v4:
+            return DwdSisDomain.europe_africa_v4
         }
     }
 }
@@ -446,7 +505,7 @@ extension DomainRegistry {
     }
     
     /// Upload all data to a specified S3 bucket
-    func syncToS3(logger: Logger, bucket: String, variables: [GenericVariable]?) throws {
+    func syncToS3(logger: Logger, bucket: String, variables: [GenericVariable]?) async throws {
         let dir = rawValue
         if let variables {
             let vDirectories = variables.map { $0.omFileName.file } + ["static"]
@@ -457,10 +516,10 @@ extension DomainRegistry {
                 if !FileManager.default.fileExists(atPath: src) {
                     continue
                 }
-                for (bucket, profile) in parseBucket(bucket) {
+                try await parseBucket(bucket).foreachConcurrent(nConcurrent: 4) { (bucket, profile) in
                     if variable.contains("_previous_day") && bucket == "openmeteo" {
                         // do not upload data from past days yet
-                        continue
+                        return
                     }
                     try Process.awsSync(
                         src: src,
@@ -472,8 +531,8 @@ extension DomainRegistry {
             logger.info("AWS upload completed in \(startTimeAws.timeElapsedPretty())")
         } else {
             let src = "\(OpenMeteo.dataDirectory)\(dir)"
-            for (bucket, profile) in parseBucket(bucket) {
-                let exclude = bucket == "openmeteo" ? ["*~", "*_previous_day*"] : ["*~"]
+            try await parseBucket(bucket).foreachConcurrent(nConcurrent: 4) { (bucket, profile) in
+                let exclude = bucket == "openmeteo" ? ["*~", "*_previous_day*", "*rolling.om"] : ["*~", "*rolling.om"]
                 logger.info("AWS upload to bucket \(bucket)")
                 let startTimeAws = DispatchTime.now()
                 try Process.awsSync(

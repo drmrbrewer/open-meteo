@@ -66,9 +66,9 @@ enum ProbabilityReader {
     }
 
     /// Reader for probabilities based on MeteoFrance ARPEGE Europe 0.1°
-    static func makeMeteoFranceEuropeReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) async throws -> GenericReader<MeteoFranceDomain, ProbabilityVariable>? {
-        return try await GenericReader<MeteoFranceDomain, ProbabilityVariable>(domain: .arpege_europe_probabilities, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
-    }
+//    static func makeMeteoFranceEuropeReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) async throws -> GenericReader<MeteoFranceDomain, ProbabilityVariable>? {
+//        return try await GenericReader<MeteoFranceDomain, ProbabilityVariable>(domain: .arpege_europe_probabilities, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+//    }
 
     /// Reader for probabilities based on ICON EU EPS
     static func makeIconEuReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) async throws -> GenericReader<IconDomains, ProbabilityVariable>? {
@@ -78,6 +78,11 @@ enum ProbabilityReader {
     /// Reader for probabilities based on ICON D2 EPS
     static func makeIconD2Reader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) async throws -> GenericReader<IconDomains, ProbabilityVariable>? {
         return try await GenericReader<IconDomains, ProbabilityVariable>(domain: .iconEu, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
+    }
+    
+    /// Reader for probabilities based on AIGEFS
+    static func makeAigefsReader(lat: Float, lon: Float, elevation: Float, mode: GridSelectionMode, options: GenericReaderOptions) async throws -> GenericReader<GfsGraphCastDomain, ProbabilityVariable>? {
+        return try await GenericReader<GfsGraphCastDomain, ProbabilityVariable>(domain: .aigfs025, lat: lat, lon: lon, elevation: elevation, mode: mode, options: options)
     }
 
     /// Reader for probabilities based on BOM ACCESS GLOBAL ENSEMBLE
@@ -121,7 +126,7 @@ extension VariablePerMemberStorage {
         let handles = self.data.filter({ $0.key.variable == precipitationVariable })
         let nMember = handles.count
         guard nMember > 1, dtHoursOfCurrentStep > 0 else {
-            print("skip nMember=\(nMember), dtHoursOfCurrentStep=\(dtHoursOfCurrentStep)")
+            //print("skip nMember=\(nMember), dtHoursOfCurrentStep=\(dtHoursOfCurrentStep)")
             return
         }
 

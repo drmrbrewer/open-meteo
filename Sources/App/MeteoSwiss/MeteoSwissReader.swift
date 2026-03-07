@@ -20,6 +20,7 @@ enum MeteoSwissVariableDerivedSurface: String, CaseIterable, GenericVariableMixa
     case snowfall
     case surface_pressure
     case weather_code
+    case weathercode
     case is_day
     case showers
     case rain
@@ -131,7 +132,7 @@ struct MeteoSwissReader: GenericReaderDerived, GenericReaderProtocol {
                 try await prefetchData(variable: .shortwave_radiation, time: time)
             case .direct_normal_irradiance, .direct_normal_irradiance_instant, .direct_radiation_instant, .shortwave_radiation_instant:
                 try await prefetchData(variable: .direct_radiation, time: time)
-            case .weather_code:
+            case .weather_code, .weathercode:
                 try await prefetchData(variable: .cloud_cover, time: time)
                 try await prefetchData(variable: .precipitation, time: time)
                 try await prefetchData(variable: .snowfall_height, time: time)
@@ -205,7 +206,7 @@ struct MeteoSwissReader: GenericReaderDerived, GenericReaderProtocol {
                 let snowfall_height = try await get(raw: .snowfall_height, time: time)
                 let elevation = reader.targetElevation
                 let snowfall = zip(snowfall_height.data, precipitation.data).map {
-                    $0 < elevation ? $1*0.7 : 0
+                    $0 < elevation ? $1*0.7 : ($1*0)
                 }
                 return DataAndUnit(snowfall, SiUnit.centimetre)
             case .rain:
@@ -213,7 +214,7 @@ struct MeteoSwissReader: GenericReaderDerived, GenericReaderProtocol {
                 let snowfall_height = try await get(raw: .snowfall_height, time: time)
                 let elevation = reader.targetElevation
                 let rain = zip(snowfall_height.data, precipitation.data).map {
-                    $0 < elevation ? 0 : $1
+                    $0 < elevation ? $0*0 : $1
                 }
                 return DataAndUnit(rain, SiUnit.millimetre)
             case .surface_pressure:
@@ -248,7 +249,7 @@ struct MeteoSwissReader: GenericReaderDerived, GenericReaderProtocol {
                 let diff = try await get(derived: .surface(.diffuse_radiation), time: time)
                 let factor = Zensun.backwardsAveragedToInstantFactor(time: time.time, latitude: reader.modelLat, longitude: reader.modelLon)
                 return DataAndUnit(zip(diff.data, factor).map(*), diff.unit)
-            case .weather_code:
+            case .weather_code, .weathercode:
                 let cloudcover = try await get(raw: .cloud_cover, time: time).data
                 let precipitation = try await get(raw: .precipitation, time: time).data
                 let snowfall = try await get(derived: .surface(.snowfall), time: time).data

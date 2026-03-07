@@ -10,8 +10,11 @@ struct ApiQueryStartEndRanges {
 
 extension ClosedRange where Element == Timestamp {
     /// Convert closed range to an openrange with delta time in seconds
+    /// Rounds the start and end times to the nearest dt boundary to ensure proper alignment
     func toRange(dt: Int) -> TimerangeDt {
-        TimerangeDt(range: lowerBound ..< upperBound.add(dt), dtSeconds: dt)
+        let roundedStart = lowerBound.floor(toNearest: dt)
+        let roundedEnd = upperBound.floor(toNearest: dt)
+        return TimerangeDt(range: roundedStart ..< roundedEnd.add(dt), dtSeconds: dt)
     }
 }
 
@@ -356,7 +359,7 @@ struct ApiQueryParameter: Content, ApiUnitsSelectable {
             }
         }
         guard timezone.count == coordinates.count else {
-            throw ForecastApiError.latitudeAndLongitudeCountMustBeTheSame
+            throw ForecastApiError.coordinatesAndTimezoneCountMustBeTheSame
         }
         return try zip(coordinates, timezone).map {
             ($0, try $1.resolve(coordinate: $0))
@@ -541,10 +544,10 @@ enum ForecastApiError: Error {
     case timezoneNotSupported
     case noDataAvailableForThisLocation
     case parameterNotAllowedWithStartEndRange(parameter: String)
-    case latitudeAndLongitudeSameCount
     case latitudeAndLongitudeNotEmpty
     case latitudeAndLongitudeMaximum(max: Int)
     case latitudeAndLongitudeCountMustBeTheSame
+    case coordinatesAndTimezoneCountMustBeTheSame
     case locationIdCountMustBeTheSame
     case startAndEndDateCountMustBeTheSame
     case coordinatesAndStartEndDatesCountMustBeTheSame
@@ -582,14 +585,14 @@ extension ForecastApiError: AbortError {
             return "Parameter '\(parameter)' is mutually exclusive with 'start_date' and 'end_date'"
         case .timezoneNotSupported:
             return "This API does not yet support timezones"
-        case .latitudeAndLongitudeSameCount:
-            return "Parameter 'latitude' and 'longitude' must have the same amount of elements"
         case .latitudeAndLongitudeNotEmpty:
             return "Parameter 'latitude' and 'longitude' must not be empty"
         case .latitudeAndLongitudeMaximum(max: let max):
             return "Parameter 'latitude' and 'longitude' must not exceed \(max) coordinates."
         case .latitudeAndLongitudeCountMustBeTheSame:
             return "Parameter 'latitude' and 'longitude' must have the same number of elements"
+        case .coordinatesAndTimezoneCountMustBeTheSame:
+            return "Parameter 'timezone' and coordinates must have the same number of elements"
         case .locationIdCountMustBeTheSame:
             return "Parameter 'location_id' and coordinates must have the same number of elements"
         case .noDataAvailableForThisLocation:

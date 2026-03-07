@@ -188,8 +188,10 @@ enum GfsDomain: String, GenericDomain, CaseIterable {
     var levels: [Int] {
         switch self {
         case .gfs05_ens:
-            /// Smaler selection, same as ECMWF IFS04
-            return [50, 200, 250, 300, 500, 700, 850, 925, 1000]
+            /// a files: 10,50,100,200,250,300,400,500,700,850,925,1000
+            /// b files: 1,2,3,5,7,20,30,70,150,350,450,550,600,750,800,900,950,975
+            /// ecmwf open data: 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000
+            return [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
         case .gfs025_ens:
             return []
         case .gfs013:
@@ -245,7 +247,7 @@ enum GfsDomain: String, GenericDomain, CaseIterable {
             return RegularGrid(nx: 1440, ny: 721, latMin: -90, lonMin: -180, dx: 0.25, dy: 0.25)
         case .nam_conus:
             /// labert conformal grid https://www.emc.ncep.noaa.gov/mmb/namgrids/hrrrspecs.html
-            let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5)
+            let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5, radius: 6371229)
             return ProjectionGrid(nx: 1799, ny: 1059, latitude: 21.138...47.8424, longitude: (-122.72)...(-60.918), projection: proj)
         case .gfswave016:
             /// 0.166° resolution
@@ -261,7 +263,7 @@ enum GfsDomain: String, GenericDomain, CaseIterable {
              (key: "Latin1InDegrees", value: "38.5")
              (key: "Latin2InDegrees", value: "38.5")
              */
-            let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5)
+            let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5, radius: 6371229)
             return ProjectionGrid(nx: 1799, ny: 1059, latitude: 21.138...47.8424, longitude: (-122.72)...(-60.918), projection: proj)
         }
     }

@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import Vapor
 // import NIOFileSystem
+import VaporTesting
 
 @Suite struct DataTests {
     init() {
@@ -10,6 +11,104 @@ import Vapor
         let projectHome = String(#filePath[...#filePath.range(of: "/Tests/")!.lowerBound])
         FileManager.default.changeCurrentDirectoryPath(projectHome)
         #endif
+    }
+    
+    @Test(.disabled(if: OpenMeteo.remoteDataDirectory == nil)) func gaussianGridSeaMatch() async throws {
+        try await withApp { app in
+            let elevationFile = try #require(await EcmwfEcpdsDomain.ifs.getStaticFile(type: .elevation, httpClient: app.http.client.shared, logger: app.logger))
+            let grid = GaussianGrid(type: .o1280)
+            // Longitude 0° wraps on x axis
+            let center = grid.findPointXY(lat: 53.647546, lon: 0)
+            #expect(center.x == 0)
+            #expect(center.y == 516)
+            let aa = try await grid.getSurroundingGridpoints(centerY: center.y, lat: 53.647546, lon: 0, elevationFile: elevationFile)
+            #expect(aa.gridpoints == [539720, 539721, 541799, 541800, 541801, 543883, 543884, 543885, 545971])
+            #expect(aa.elevations == [5.0, -999.0, 6.0, -4.0, -999.0, 3.0, -999.0, -999.0, 14.0])
+            #expect(aa.distances.isSimilar([0.009189781, 0.039145403, 0.039145403, 0.00065343047, 0.03049417, 0.03049417, 0.0020012162, 0.03172773, 0.03172773], accuracy: 0.0001))
+            
+            let centerbb = grid.findPointXY(lat: 50.781, lon: 1.596)
+            let bb = try await grid.getSurroundingGridpoints(centerY: centerbb.y, lat: 50.781, lon: 1.596, elevationFile: elevationFile)
+            #expect(bb.gridpoints == [628289, 628290, 628291, 630533, 630534, 630535, 632781, 632782, 632783])
+            #expect(bb.elevations == [-999.0, -999.0, 50.0, -999.0, -999.0, 76.0, -999.0, 28.0, 94.0])
+            #expect(bb.distances.isSimilar([0.029574867, 0.00649387, 0.03488704, 0.02403517, 0.00012665402, 0.027509289, 0.028389191, 0.0036591913, 0.030038308], accuracy: 0.0001))
+            
+            
+            let bbb = try #require(await grid.findPointInSea(lat: 50.781, lon: 1.596, elevationFile: elevationFile))
+            #expect(bbb.gridpoint == 630534)
+            
+            // WAM only returns NaN for this grid cell, use corrected land-mask
+            let elevationFile2 = try #require(await EcmwfEcpdsDomain.wam.getStaticFile(type: .elevation, httpClient: app.http.client.shared, logger: app.logger))
+            let center2 = grid.findPointXY(lat: 50.781, lon: 1.596)
+            #expect(center.x == 0)
+            #expect(center.y == 516)
+            let aaa = try await grid.getSurroundingGridpoints(centerY: center2.y, lat: 50.781, lon: 1.596, elevationFile: elevationFile2)
+            #expect(aaa.gridpoints == [628289, 628290, 628291, 630533, 630534, 630535, 632781, 632782, 632783])
+            #expect(aaa.elevations.isSimilar([-999.0, -999.0, .nan, -999.0, .nan, .nan, -999.0, .nan, .nan]))
+            #expect(aaa.distances.isSimilar([0.029574867, 0.00649387, 0.03488704, 0.02403517, 0.00012665402, 0.027509289, 0.028389191, 0.0036591913, 0.030038308], accuracy: 0.0001))
+            let bbbb = try #require(await grid.findPointInSea(lat: 50.781, lon: 1.596, elevationFile: elevationFile2))
+            #expect(bbbb.gridpoint == 628290)
+            let bResolved = grid.getCoordinates(gridpoint: 628290)
+            #expect(bResolved.latitude == 50.861156)
+            #expect(bResolved.longitude == 1.6042781)
+            
+            let a = try #require(await grid.findPointInSea(lat: 53.647546, lon: 0, elevationFile: elevationFile))
+            #expect(a.gridpoint == 543884)
+            
+            // Nearest point already is sea
+            let b = try #require(await grid.findPointInSea(lat: 53.647546, lon: 0.1, elevationFile: elevationFile))
+            #expect(b.gridpoint == 541801)
+            
+            let c = try #require(await grid.findPointInSea(lat: 53.647546, lon: -0.1, elevationFile: elevationFile))
+            #expect(c.gridpoint == 543884)
+            
+            let d = try #require(await grid.findPointInSea(lat: 90, lon: 0, elevationFile: elevationFile))
+            #expect(d.gridpoint == 0)
+            
+            let e = try #require(await grid.findPointInSea(lat: -90, lon: 342, elevationFile: elevationFile))
+            #expect(e.gridpoint == 6599680-1)
+            
+            /// Uri: 3 points are very close, but one point has a better elevation matching. Other 6 points, may have better elevation, but are more than 20 km away
+            /// Use elevation AND distance weighted grid cell selection
+            let f = try #require(await grid.findPointTerrainOptimised(lat: 46.876004, lon: 8.663721, elevation: 600, elevationFile: elevationFile))
+            #expect(f.gridpoint == 760163)
+            
+            /// Zermatt: Hopeless at 9 km resolution. Model is always around 3000m
+            let g = try #require(await grid.findPointTerrainOptimised(lat: 46.021498, lon: 7.748033, elevation: 1620, elevationFile: elevationFile))
+            #expect(g.gridpoint == 795074)
+            
+            /// Cuxhaven at the sea. Center is sea grid point. 
+            let h = try #require(await grid.findPointTerrainOptimised(lat: 53.890130, lon: 8.671630, elevation: 5, elevationFile: elevationFile))
+            #expect(h.gridpoint == 537694)
+        }
+    }
+    
+    @Test(.disabled(if: OpenMeteo.remoteDataDirectory == nil)) func iconD2GridFindPoint() async throws {
+        try await withApp { app in
+            let elevationFile = try #require(await IconDomains.iconD2.getStaticFile(type: .elevation, httpClient: app.http.client.shared, logger: app.logger))
+            let grid = IconDomains.iconD2.grid
+            // Longitude 0° wraps on x axis
+            
+            let a = try #require(await grid.findPointInSea(lat: 53.647546, lon: 0, elevationFile: elevationFile))
+            #expect(a.gridpoint == 635642)
+            
+            let b = try #require(await grid.findPointInSea(lat: 53.647546, lon: 0.1, elevationFile: elevationFile))
+            #expect(b.gridpoint == 635646)
+            
+            let c = try #require(await grid.findPointInSea(lat: 53.647546, lon: -0.1, elevationFile: elevationFile))
+            #expect(c.gridpoint == 635637)
+            
+            /// Uri, but higher elevation than grid cell -> use neighbor
+            let f = try #require(await grid.findPointTerrainOptimised(lat: 46.876004, lon: 8.663721, elevation: 850, elevationFile: elevationFile))
+            #expect(f.gridpoint == 226619)
+            
+            /// Zermatt: 1600m surface, but request 2000m
+            let g = try #require(await grid.findPointTerrainOptimised(lat: 46.021498, lon: 7.748033, elevation: 2000, elevationFile: elevationFile))
+            #expect(g.gridpoint == 173115)
+            
+            /// Cuxhaven at the sea. Center is sea grid point.
+            let h = try #require(await grid.findPointTerrainOptimised(lat: 53.900130, lon: 8.651630, elevation: 5, elevationFile: elevationFile))
+            #expect(h.gridpoint == 650655)
+        }
     }
 
     @Test func aggregation() {
@@ -169,7 +268,7 @@ import Vapor
     }
 
     @Test func lambertConformal() {
-        let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5)
+        let proj = LambertConformalConicProjection(λ0: -97.5, ϕ0: 0, ϕ1: 38.5, ϕ2: 38.5, radius: 6370.997)
         let pos = proj.forward(latitude: 47, longitude: -8)
         #expect(pos.x == 5833.8677)
         #expect(pos.y == 8632.733)
@@ -231,7 +330,7 @@ import Vapor
 
     @Test func lambertAzimuthalEqualAreaProjection() {
         let proj = LambertAzimuthalEqualAreaProjection(λ0: -2.5, ϕ1: 54.9, radius: 6371229)
-        let grid = ProjectionGrid(nx: 1042, ny: 970, latitudeProjectionOrigion: -1036000, longitudeProjectionOrigion: -1158000, dx: 2000, dy: 2000, projection: proj)
+        let grid = ProjectionGrid(nx: 1042, ny: 970, latitudeProjectionOrigin: -1036000, longitudeProjectionOrigin: -1158000, dx: 2000, dy: 2000, projection: proj)
         // peak north denmark 57.745566, 10.620785
         let coords = proj.forward(latitude: 57.745566, longitude: 10.620785)
         #expect(coords.x.isApproximatelyEqual(to: 773650.5, absoluteTolerance: 0.0001)) // around 774000.0
@@ -290,7 +389,7 @@ import Vapor
 
     @Test func stereographic() {
         let nx = 935
-        let grid = ProjectionGrid(nx: 935, ny: 824, latitude: 18.14503...45.405453, longitude: 217.10745...349.8256, projection: StereograpicProjection(latitude: 90, longitude: 249, radius: 6371229))
+        let grid = ProjectionGrid(nx: 935, ny: 824, latitude: 18.14503...45.405453, longitude: 217.10745...349.8256, projection: StereographicProjection(latitude: 90, longitude: 249, radius: 6371229))
 
         let pos = grid.findPoint(lat: 64.79836, lon: 241.40111)!
         #expect(pos % nx == 420)
@@ -329,7 +428,7 @@ import Vapor
 
     @Test func cerraGrid() {
         //
-        let grid = ProjectionGrid(nx: 1069, ny: 1069, latitude: 20.29228...63.769516, longitude: -17.485962...74.10509, projection: LambertConformalConicProjection(λ0: 8, ϕ0: 50, ϕ1: 50, ϕ2: 50))
+        let grid = ProjectionGrid(nx: 1069, ny: 1069, latitude: 20.29228...63.769516, longitude: -17.485962...74.10509, projection: LambertConformalConicProjection(λ0: 8, ϕ0: 50, ϕ1: 50, ϕ2: 50, radius: 6371229))
 
         var pos = grid.findPoint(lat: 20.29228, lon: -17.485962)!
         var (lat, lon) = grid.getCoordinates(gridpoint: pos)
@@ -514,6 +613,29 @@ import Vapor
      */
     @Test func ecmwfIfsGrid() {
         let grid = GaussianGrid(type: .o1280)
+        
+        /// In the middle of 2 latitude lines. Only evaluating one latitude line would not be correct.
+        /// Because the Gaussian grid is basically a shifted triangle strip, both lines need to be evaluated
+        let x = grid.findPointXY(lat: 53.63797, lon: 45)
+        #expect(x.x == 261)
+        #expect(x.y == 517)
+        
+        let pos2 = grid.findPointXY(lat: 19.229, lon: 233.723 - 360)
+        #expect(pos2.x == 2625)
+        #expect(pos2.y == 1006)
+        
+        let pos3 = grid.findPointXY(lat: 90+1, lon: 342)
+        #expect(pos3.x == 19)
+        #expect(pos3.y == 0)
+        
+        let pos4 = grid.findPointXY(lat: -90-1, lon: 342)
+        #expect(pos4.x == 19)
+        #expect(pos4.y == 2559)
+        
+        let pos5 = grid.findPointXY(lat: -19.229, lon: 233.723 - 360)
+        #expect(pos5.x == 2625)
+        #expect(pos5.y == 1553)
+        
         #expect(grid.nxOf(y: 0) == 20)
         #expect(grid.nxOf(y: 1) == 24)
         #expect(grid.nxOf(y: 1280 - 1) == 5136)
@@ -599,7 +721,7 @@ import Vapor
 
     @Test func stereographicIconMCH1() {
         let projection = RotatedLatLonProjection(latitude: 43.0, longitude: 190.0)
-        let grid = ProjectionGrid(nx: Int((6.86+4.83)/0.01+1), ny: Int((4.46+3.39)/0.01+1), latitudeProjectionOrigion: -4.46, longitudeProjectionOrigion: -6.86, dx: 0.01, dy: 0.01, projection: projection)
+        let grid = ProjectionGrid(nx: Int((6.86+4.83)/0.01+1), ny: Int((4.46+3.39)/0.01+1), latitudeProjectionOrigin: -4.46, longitudeProjectionOrigin: -6.86, dx: 0.01, dy: 0.01, projection: projection)
 
         #expect(grid.nx == 1170)
         #expect(grid.ny == 786)

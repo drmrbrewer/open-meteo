@@ -4,11 +4,7 @@ import OmFileFormat
 @preconcurrency import SwiftEccodes
 
 /**
-Jma Downloader
- 
- TODO:
- - elevation download
- - 3h MSM pressue level data
+JMA Downloader
  */
 struct JmaDownload: AsyncCommand {
     struct Signature: CommandSignature {
@@ -55,21 +51,21 @@ struct JmaDownload: AsyncCommand {
 
         if let timeinterval = signature.timeinterval {
             for run in try Timestamp.parseRange(yyyymmdd: timeinterval).toRange(dt: 86400).with(dtSeconds: 86400 / 4) {
-                let handles = try await download(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, uploadS3Bucket: nil)
+                let handles = try await download(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, uploadS3Bucket: nil, createNetCdf: signature.createNetcdf)
                 try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: false, uploadS3Bucket: nil, uploadS3OnlyProbabilities: false)
             }
             return
         }
 
         let run = try signature.run.flatMap(Timestamp.fromRunHourOrYYYYMMDD) ?? domain.lastRun
-        let handles = try await download(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, uploadS3Bucket: signature.uploadS3Bucket)
+        let handles = try await download(application: context.application, domain: domain, run: run, server: server, concurrent: nConcurrent, uploadS3Bucket: signature.uploadS3Bucket, createNetCdf: signature.createNetcdf)
         try await GenericVariableHandle.convert(logger: logger, domain: domain, createNetcdf: signature.createNetcdf, run: run, handles: handles, concurrent: nConcurrent, writeUpdateJson: true, uploadS3Bucket: signature.uploadS3Bucket, uploadS3OnlyProbabilities: false)
         logger.info("Finished in \(start.timeElapsedPretty())")
     }
 
     /// MSM or GSM domain
     /// Return open file handles, to ensure overlapping runs are not conflicting
-    func download(application: Application, domain: JmaDomain, run: Timestamp, server: String, concurrent: Int, uploadS3Bucket: String?) async throws -> [GenericVariableHandle] {
+    func download(application: Application, domain: JmaDomain, run: Timestamp, server: String, concurrent: Int, uploadS3Bucket: String?, createNetCdf: Bool) async throws -> [GenericVariableHandle] {
         let logger = application.logger
         logger.info("Downloading domain '\(domain.rawValue)' run '\(run.iso8601_YYYY_MM_dd_HH_mm)'")
         let deadLineHours: Double = domain == .gsm ? 3 : 6
@@ -97,6 +93,29 @@ struct JmaDownload: AsyncCommand {
             filesToDownload = range.map { hour in
                 "Z__C_RJTD_\(run.format_YYYYMMddHH)0000_MSM_GPV_Rjp_Lsurf_FH\(hour)_grib2.bin"
             }
+        case .msm_upper_level:
+            // 0 und 12z run have more data
+            let runc = run.toComponents()
+            let after2022july = (runc.year >= 2022 && runc.month >= 7) || runc.year >= 2023
+            let range = (run.hour % 12 == 0 && after2022july) ? ["00-15", "18-33", "36-39", "42-51", "54-78"] : ["00-15", "18-33", "36-39"]
+            filesToDownload = range.map { hour in
+                "Z__C_RJTD_\(run.format_YYYYMMddHH)0000_MSM_GPV_Rjp_L-pall_FH\(hour)_grib2.bin"
+            }
+        }
+        
+        if !domain.surfaceElevationFileOm.exists() && domain != .msm_upper_level {
+            let messages = try await curl.downloadGrib(url: "\(server)\(filesToDownload.first!)", bzip2Decode: false)
+            guard let sp = try messages.first(where: {$0.get(attribute: "shortName") == "sp"})?.to2D(nx: domain.grid.nx, ny: domain.grid.ny, shift180LongitudeAndFlipLatitudeIfRequired: true),
+                  let prmsl = try messages.first(where: {$0.get(attribute: "shortName") == "prmsl"})?.to2D(nx: domain.grid.nx, ny: domain.grid.ny, shift180LongitudeAndFlipLatitudeIfRequired: true),
+                  let t2m = try messages.first(where: {$0.get(attribute: "shortName") == "2t" || ($0.get(attribute: "shortName") == "t" && $0.getLong(attribute: "level") == 2)})?.to2D(nx: domain.grid.nx, ny: domain.grid.ny, shift180LongitudeAndFlipLatitudeIfRequired: true)
+            else {
+                fatalError("missing variable in grib file")
+            }
+            let elevation = zip(sp.array.data, zip(prmsl.array.data, t2m.array.data)).map {
+                Meteorology.elevation(sealevelPressure: $1.0 / 100, surfacePressure: $0 / 100, temperature_2m: $1.1 - 273.15)
+            }
+            try domain.surfaceElevationFileOm.createDirectory()
+            try elevation.writeOmFile2D(file: domain.surfaceElevationFileOm.getFilePath(), grid: domain.grid, createNetCdf: createNetCdf)
         }
 
         /// Keep values from previous timestep. Actori isolated, because of concurrent data conversion
@@ -113,6 +132,8 @@ struct JmaDownload: AsyncCommand {
                           let stepRange = message.get(attribute: "stepRange"),
                           let stepType = message.get(attribute: "stepType"),
                           let hour = message.get(attribute: "endStep").flatMap(Int.init) else {
+                        let shortName = message.get(attribute: "shortName") ?? "-"
+                        logger.info("Could not map variable \(shortName)")
                         return
                     }
                     if hour == 0 && variable.skipHour0 {
@@ -120,6 +141,7 @@ struct JmaDownload: AsyncCommand {
                     }
                     let timestamp = run.add(hours: hour)
                     var grib2d = GribArray2D(nx: domain.grid.nx, ny: domain.grid.ny)
+                    //try message.debugGrid(grid: domain.grid, flipLatidude: true, shift180Longitude: false)
                     try grib2d.load(message: message)
                     if domain.isGlobal {
                         grib2d.array.shift180LongitudeAndFlipLatitude()
@@ -189,7 +211,7 @@ extension GribMessage {
         case "lcc": return JmaSurfaceVariable.cloud_cover_low
         case "mcc": return JmaSurfaceVariable.cloud_cover_mid
         case "hcc": return JmaSurfaceVariable.cloud_cover_high
-        case "dswrf", "msdwswrf": return JmaSurfaceVariable.shortwave_radiation
+        case "dswrf", "msdwswrf", "avg_sdswrf": return JmaSurfaceVariable.shortwave_radiation
         case "unknown":
             if parameterCategory == 6 && parameterNumber == 1 {
                 return JmaSurfaceVariable.cloud_cover
@@ -464,6 +486,7 @@ typealias JmaVariable = SurfaceAndPressureVariable<JmaSurfaceVariable, JmaPressu
 enum JmaDomain: String, GenericDomain, CaseIterable {
     case gsm
     case msm
+    case msm_upper_level
 
     var domainRegistry: DomainRegistry {
         switch self {
@@ -471,6 +494,8 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             return .jma_gsm
         case .msm:
             return .jma_msm
+        case .msm_upper_level:
+            return .jma_msm_upper_level
         }
     }
 
@@ -491,10 +516,14 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
     }
 
     var dtSeconds: Int {
-        if self == .gsm {
+        switch self {
+        case .gsm:
             return 6 * 3600
+        case .msm:
+            return 3600
+        case .msm_upper_level:
+            return 3 * 3600
         }
-        return 3600
     }
     var isGlobal: Bool {
         return self == .gsm
@@ -504,7 +533,7 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
         switch self {
         case .gsm:
             return 6 * 3600
-        case .msm:
+        case .msm, .msm_upper_level:
             return 3 * 3600
         }
     }
@@ -517,7 +546,7 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             // First hours 3.5 h delay, second part 6.5 h delay
             // every 6 hours
             return t.add(-6 * 3600).floor(toNearest: 6 * 3600)
-        case .msm:
+        case .msm, .msm_upper_level:
             // Delay of 2-3 hours to init
             // every 3 hours
             return t.add(-2 * 3600).floor(toNearest: 3 * 3600)
@@ -536,7 +565,7 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             }
             let through = hour == 00 || hour == 12 ? 264 : 136
             return Array(stride(from: 0, through: through, by: 6))
-        case .msm:
+        case .msm, .msm_upper_level:
             let through = hour == 00 || hour == 12 ? 78 : 39
             return Array(stride(from: 0, through: through, by: 1))
         }
@@ -549,6 +578,8 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             return [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100]
         case .msm:
             return []
+        case .msm_upper_level:
+            return [1000, 975, 950, 529, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100]
         }
     }
 
@@ -558,6 +589,8 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             return 110
         case .msm:
             return 78 + 36
+        case .msm_upper_level:
+            return 80
         }
     }
 
@@ -567,6 +600,8 @@ enum JmaDomain: String, GenericDomain, CaseIterable {
             return RegularGrid(nx: 720, ny: 361, latMin: -90, lonMin: -180, dx: 0.5, dy: 0.5)
         case .msm:
             return RegularGrid(nx: 481, ny: 505, latMin: 22.4, lonMin: 120, dx: 0.0625, dy: 0.05)
+        case .msm_upper_level:
+            return RegularGrid(nx: 241, ny: 253, latMin: 22.4, lonMin: 120, dx: 0.125, dy: 0.1)
         }
     }
 }
